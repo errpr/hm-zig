@@ -1,0 +1,5 @@
+{
+  "terminal.integrated.shellArgs.windows": [
+    "/k shellconfig.bat"
+  ]
+}
