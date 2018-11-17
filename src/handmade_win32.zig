@@ -3,6 +3,16 @@ use @import("lib/win32/win32_types.zig");
 const w32f = @import("lib/win32/win32_functions.zig");
 const w32c = @import("lib/win32/win32_constants.zig");
 
+// /* Ternary raster operations */
+// #define SRCCOPY             (DWORD)0x00CC0020 /* dest = source                   */
+// #define SRCPAINT            (DWORD)0x00EE0086 /* dest = source OR dest           */
+// #define SRCAND              (DWORD)0x008800C6 /* dest = source AND dest          */
+// #define SRCINVERT           (DWORD)0x00660046 /* dest = source XOR dest          */
+// #define SRCERASE            (DWORD)0x00440328 /* dest = source AND (NOT dest )   */
+// #define NOTSRCCOPY          (DWORD)0x00330008 /* dest = (NOT source)             */
+// #define NOTSRCERASE         (DWORD)0x001100A6 /* dest = (NOT src) AND (NOT dest) */
+// #define MERGECOPY           (DWORD)0x00C000CA /* dest = (source AND pattern)     */
+// #define MERGEPAINT          (DWORD)0x00BB0226 /* dest = (NOT source) OR dest     */
 // #define PATCOPY             (DWORD)0x00F00021 /* dest = pattern                  */
 // #define PATPAINT            (DWORD)0x00FB0A09 /* dest = DPSnoo                   */
 // #define PATINVERT           (DWORD)0x005A0049 /* dest = pattern XOR dest         */
@@ -11,30 +21,116 @@ const w32c = @import("lib/win32/win32_constants.zig");
 // #define WHITENESS (DWORD)0x00FF0062 /* dest = WHITE                    */
 // WHITENESS wasn't in MajorLag's win32 constants! What a slacker.
 const WHITENESS: DWORD = 0x00FF0062;
+const SRCCOPY: DWORD = 0x00CC0020;
 
-fn w32str(comptime string_literal: []u8) []const c_ushort {
+// globals
+var Running: bool = undefined;
+var BitmapInfo: BITMAPINFO = undefined;
+var BitmapMemory: ?*c_void = undefined;
+var BitmapHandle: HBITMAP = undefined;
+var BitmapDeviceContext: HDC = undefined;
+
+fn w32str(comptime string_literal: []u8) []const c_ushort 
+{
     var result = []const c_ushort {'a'} ** string_literal.len;
-    for (string_literal) |u8char, i| {
+    for (string_literal) |u8char, i| 
+    {
         result[i] = c_ushort(u8char);
     }
     return result;
 }
 
-pub stdcallcc fn MainWindowCallback(Window: HWND,
-                                 Message: UINT,
-                                 WParam: WPARAM,
-                                 LParam: LPARAM) LRESULT
+fn Win32ResizeDIBSection(Width: c_int, Height: c_int) void 
+{
+    if(BitmapHandle != null)
+    {
+        // @ptrCast(*c_void, @alignCast(@alignOf(*c_void), BitmapHandle))
+        // above didn't work, but below does... really makes you think
+        const result = w32f.DeleteObject(@ptrCast(*c_void, @alignCast(1, BitmapHandle)));
+        if (result == 0) 
+        {
+            const errorcode = w32f.GetLastError();
+            w32f.OutputDebugStringA(c"Delete Bitmap Failed\n");
+        }
+    }
+
+    if(BitmapDeviceContext == null)
+    {
+        BitmapDeviceContext = w32f.CreateCompatibleDC(null);
+    }
+
+    BitmapInfo = BITMAPINFO {
+        .bmiHeader = BITMAPINFOHEADER {
+            .biSize = undefined,
+            .biWidth = Width,
+            .biHeight = Height,
+            .biPlanes = 1,
+            .biBitCount = 32,
+            .biCompression = 0x0000,
+            .biSizeImage = 0,
+            .biXPelsPerMeter = 0,
+            .biYPelsPerMeter = 0,
+            .biClrUsed = 0,
+            .biClrImportant = 0,
+        },
+        .bmiColors = [1]RGBQUAD { 
+            RGBQUAD {
+                .rgbBlue = 0,
+                .rgbGreen = 0,
+                .rgbRed = 0,
+                .rgbReserved = 0,
+            }
+        },
+    };
+
+    BitmapInfo.bmiHeader.biSize = @sizeOf(BITMAPINFOHEADER);
+    BitmapHandle = w32f.CreateDIBSection(BitmapDeviceContext, &BitmapInfo, w32c.DIB_RGB_COLORS, &BitmapMemory, null, 0);
+}
+
+fn Win32UpdateWindow(DeviceContext: HDC, X: c_int, Y: c_int, Width: c_int, Height: c_int) void 
+{
+    const result = w32f.StretchDIBits(
+        DeviceContext,
+        X, Y, Width, Height,
+        X, Y, Width, Height,
+        BitmapMemory,
+        BitmapInfo,
+        w32c.DIB_RGB_COLORS,
+        SRCCOPY,
+    );
+
+    if(result == 0) 
+    {
+        w32f.OutputDebugStringA(c"StretchDIBits returned 0\n");
+    }
+}
+
+pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
+                                         Message: UINT,
+                                         WParam: WPARAM,
+                                         LParam: LPARAM) LRESULT
 {
     var Result = LRESULT(0);
     switch(Message) {
         w32c.WM_SIZE => {
-            w32f.OutputDebugStringA(c"WM_SIZE\n");
+            var ClientRect = RECT {
+                .left = 0,
+                .right = 0,
+                .top = 0,
+                .bottom = 0,
+            };
+            const ignored = w32f.GetClientRect(Window, &ClientRect);
+            const Width = ClientRect.right - ClientRect.left;
+            const Height = ClientRect.bottom - ClientRect.top;
+            Win32ResizeDIBSection(Width, Height);
         },
         w32c.WM_DESTROY => {
-            w32f.OutputDebugStringA(c"WM_DESTROY\n");
+            // crashed?
+            Running = false;
         },
         w32c.WM_CLOSE => {
-            w32f.OutputDebugStringA(c"WM_CLOSE\n");
+            // closed by user
+            Running = false;
         },
         w32c.WM_ACTIVATEAPP => {
             w32f.OutputDebugStringA(c"WM_ACTIVATEAPP\n");
@@ -53,7 +149,7 @@ pub stdcallcc fn MainWindowCallback(Window: HWND,
             const Y: c_int = Paint.rcPaint.top;
             const Width: c_int = Paint.rcPaint.right - Paint.rcPaint.left;
             const Height: c_int = Paint.rcPaint.bottom - Paint.rcPaint.top;
-            const ignored1 = w32f.PatBlt(DeviceContext, X, Y, Width, Height, WHITENESS);
+            Win32UpdateWindow(DeviceContext, X, Y, Width, Height);
             const ignored2 = w32f.EndPaint(Window, &Paint);
         },
         else => {
@@ -68,12 +164,11 @@ pub export fn WinMain(Instance: HINSTANCE,
                       CommandLine: LPSTR, 
                       ShowCode: c_int) c_int 
 {
-    //const window_proc = w32f.CallWindowProcW();
     const ClassNamePtr = (comptime w32str(&"HandmadeHeroWindowClass"))[0..].ptr;
 
     const WindowClass = WNDCLASSW {
-        .style = w32c.CS_OWNDC|w32c.CS_VREDRAW|w32c.CS_HREDRAW,
-        .lpfnWndProc = MainWindowCallback, //window_proc,
+        .style = 0,
+        .lpfnWndProc = Win32MainWindowCallback,
         .cbClsExtra = 0,
         .cbWndExtra = 0,
         .hInstance = Instance,
@@ -85,7 +180,8 @@ pub export fn WinMain(Instance: HINSTANCE,
     };
 
     const atom = w32f.RegisterClassW(&WindowClass);
-    if(atom != 0) {
+    if (atom != 0) 
+    {
         const WindowHandle = 
             w32f.CreateWindowExW(
                 DWORD(0), 
@@ -100,23 +196,32 @@ pub export fn WinMain(Instance: HINSTANCE,
                 null,
                 Instance,
                 null);
-        if(WindowHandle != null) {
+
+        if (WindowHandle != null) 
+        {
             var Message: MSG = undefined;
-            while(true) {
+            Running = true;
+            while(Running) {
                 const MessageResult = w32f.GetMessageW(LPMSG(&Message), null, UINT(0), UINT(0));
-                if (MessageResult > 0) {
+                if (MessageResult > 0) 
+                {
                     const ignored1 = w32f.TranslateMessage(&Message);
                     const ignored2 = w32f.DispatchMessageW(&Message);
-                } else {
+                } 
+                else 
+                {
                     break;
                 }
             }
-
-        } else {
+        } 
+        else 
+        {
             const errorcode = w32f.GetLastError();
             w32f.OutputDebugStringA(c"No window handle\n");
         }
-    } else {
+    } 
+    else 
+    {
         const errorcode = w32f.GetLastError();
         w32f.OutputDebugStringA(c"No atom\n");
     }
