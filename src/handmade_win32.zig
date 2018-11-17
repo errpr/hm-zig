@@ -26,9 +26,9 @@ const SRCCOPY: DWORD = 0x00CC0020;
 // globals
 var Running: bool = undefined;
 var BitmapInfo: BITMAPINFO = undefined;
-var BitmapMemory: ?*c_void = undefined;
-var BitmapHandle: HBITMAP = undefined;
-var BitmapDeviceContext: HDC = undefined;
+var BitmapMemory: ?*c_void = null;
+var BitmapWidth: c_int = 0;
+var BitmapHeight: c_int = 0;
 
 fn w32str(comptime string_literal: []u8) []const c_ushort 
 {
@@ -40,30 +40,52 @@ fn w32str(comptime string_literal: []u8) []const c_ushort
     return result;
 }
 
+fn RenderWeirdGradient(XOffset: u32, YOffset: u32) void
+{
+    var Pitch: usize = @intCast(usize, BitmapWidth) * 4;
+    var Row = @ptrCast([*]u8, BitmapMemory);
+    var Y: i32 = 0;
+    while (Y < BitmapHeight) 
+    {
+        var X: i32 = 0;
+        var Pixel = @ptrCast([*]u32, @alignCast(4, Row));
+        
+        while (X < BitmapWidth)
+        {
+            //Blue
+            var Blue = @intCast(u32, @truncate(u8, @intCast(u32, X) + XOffset));
+            var Green = @intCast(u32, @truncate(u8, @intCast(u32, Y) + YOffset));
+
+            Pixel.* = Green << 8 | Blue;
+            Pixel += 1;
+
+            X += 1;
+        }
+        Row += Pitch;
+        Y += 1;
+    }
+}
+
 fn Win32ResizeDIBSection(Width: c_int, Height: c_int) void 
 {
-    if(BitmapHandle != null)
+    if(BitmapMemory != null) 
     {
-        // @ptrCast(*c_void, @alignCast(@alignOf(*c_void), BitmapHandle))
-        // above didn't work, but below does... really makes you think
-        const result = w32f.DeleteObject(@ptrCast(*c_void, @alignCast(1, BitmapHandle)));
+        const result = w32f.VirtualFree(BitmapMemory, 0, w32c.MEM_RELEASE);
         if (result == 0) 
         {
             const errorcode = w32f.GetLastError();
-            w32f.OutputDebugStringA(c"Delete Bitmap Failed\n");
+            w32f.OutputDebugStringA(c"VirtualFree of BitmapMemory failed.\n");
         }
     }
 
-    if(BitmapDeviceContext == null)
-    {
-        BitmapDeviceContext = w32f.CreateCompatibleDC(null);
-    }
+    BitmapWidth = Width;
+    BitmapHeight = Height;
 
     BitmapInfo = BITMAPINFO {
         .bmiHeader = BITMAPINFOHEADER {
             .biSize = undefined,
-            .biWidth = Width,
-            .biHeight = Height,
+            .biWidth = BitmapWidth,
+            .biHeight = -BitmapHeight,
             .biPlanes = 1,
             .biBitCount = 32,
             .biCompression = 0x0000,
@@ -84,15 +106,18 @@ fn Win32ResizeDIBSection(Width: c_int, Height: c_int) void
     };
 
     BitmapInfo.bmiHeader.biSize = @sizeOf(BITMAPINFOHEADER);
-    BitmapHandle = w32f.CreateDIBSection(BitmapDeviceContext, &BitmapInfo, w32c.DIB_RGB_COLORS, &BitmapMemory, null, 0);
+    const BitmapMemorySize = @intCast(c_ulonglong, (BitmapWidth * BitmapHeight)) * 4;
+    BitmapMemory = w32f.VirtualAlloc(null, BitmapMemorySize, w32c.MEM_COMMIT, w32c.PAGE_READWRITE);
 }
 
-fn Win32UpdateWindow(DeviceContext: HDC, X: c_int, Y: c_int, Width: c_int, Height: c_int) void 
+fn Win32UpdateWindow(DeviceContext: HDC, ClientRect: *const RECT) void 
 {
+    const WindowWidth = ClientRect.right - ClientRect.left;
+    const WindowHeight = ClientRect.bottom - ClientRect.top;
     const result = w32f.StretchDIBits(
         DeviceContext,
-        X, Y, Width, Height,
-        X, Y, Width, Height,
+        0, 0, BitmapWidth, BitmapHeight,
+        0, 0, WindowWidth, WindowHeight,
         BitmapMemory,
         BitmapInfo,
         w32c.DIB_RGB_COLORS,
@@ -136,6 +161,14 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
             w32f.OutputDebugStringA(c"WM_ACTIVATEAPP\n");
         },
         w32c.WM_PAINT => {
+            var ClientRect = RECT {
+                .left = 0,
+                .right = 0,
+                .top = 0,
+                .bottom = 0,
+            };
+
+            
             var Paint = PAINTSTRUCT {
                 .hdc = null,
                 .fErase = BOOL(0),
@@ -144,12 +177,10 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
                 .fIncUpdate = BOOL(0),
                 .rgbReserved = []u8 {0} ** 32,
             };
+
             var DeviceContext = w32f.BeginPaint(Window, &Paint);
-            const X: c_int = Paint.rcPaint.left;
-            const Y: c_int = Paint.rcPaint.top;
-            const Width: c_int = Paint.rcPaint.right - Paint.rcPaint.left;
-            const Height: c_int = Paint.rcPaint.bottom - Paint.rcPaint.top;
-            Win32UpdateWindow(DeviceContext, X, Y, Width, Height);
+            const ignored = w32f.GetClientRect(Window, &ClientRect);
+            Win32UpdateWindow(DeviceContext, &ClientRect);
             const ignored2 = w32f.EndPaint(Window, &Paint);
         },
         else => {
@@ -182,7 +213,7 @@ pub export fn WinMain(Instance: HINSTANCE,
     const atom = w32f.RegisterClassW(&WindowClass);
     if (atom != 0) 
     {
-        const WindowHandle = 
+        const Window = 
             w32f.CreateWindowExW(
                 DWORD(0), 
                 ClassNamePtr,
@@ -197,21 +228,41 @@ pub export fn WinMain(Instance: HINSTANCE,
                 Instance,
                 null);
 
-        if (WindowHandle != null) 
+        if (Window != null) 
         {
-            var Message: MSG = undefined;
             Running = true;
+            var XOffset: u32 = 0;
+            var YOffset: u32 = 0;
             while(Running) {
-                const MessageResult = w32f.GetMessageW(LPMSG(&Message), null, UINT(0), UINT(0));
-                if (MessageResult > 0) 
+                var Message: MSG = undefined;
+                var MessageResult: BOOL = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
+
+                while (MessageResult != 0)
                 {
+                    // why not handle this in the callback?
+                    if (Message.message == w32c.WM_QUIT)
+                    {
+                        Running = false;
+                    }
+
                     const ignored1 = w32f.TranslateMessage(&Message);
                     const ignored2 = w32f.DispatchMessageW(&Message);
-                } 
-                else 
-                {
-                    break;
+                    MessageResult = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
                 }
+                
+                RenderWeirdGradient(XOffset, YOffset);
+                const DeviceContext = w32f.GetDC(Window);
+                var ClientRect = RECT {
+                    .left = 0,
+                    .right = 0,
+                    .top = 0,
+                    .bottom = 0,
+                };
+                const ignored3 = w32f.GetClientRect(Window, &ClientRect);
+                Win32UpdateWindow(DeviceContext, &ClientRect);
+                const ignored4 = w32f.ReleaseDC(Window, DeviceContext);
+                XOffset = XOffset +% 1;
+                YOffset = YOffset +% 1;
             }
         } 
         else 
