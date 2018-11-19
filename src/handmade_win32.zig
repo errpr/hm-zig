@@ -23,72 +23,33 @@ const w32c = @import("lib/win32/win32_constants.zig");
 const WHITENESS: DWORD = 0x00FF0062;
 const SRCCOPY: DWORD = 0x00CC0020;
 
+const win32_offscreen_buffer = struct 
+{
+    Info: BITMAPINFO,
+    Memory: ?*c_void,
+    Width: c_int,
+    Height: c_int,
+    Pitch: usize,
+    BytesPerPixel: c_int,
+};
+
+const win32_window_dimension = struct
+{
+    Width: c_int,
+    Height: c_int,
+};
+
 // globals
 var Running: bool = undefined;
-var BitmapInfo: BITMAPINFO = undefined;
-var BitmapMemory: ?*c_void = null;
-var BitmapWidth: c_int = 0;
-var BitmapHeight: c_int = 0;
-
-fn w32str(comptime string_literal: []u8) []const c_ushort 
-{
-    var result = []const c_ushort {'a'} ** string_literal.len;
-    for (string_literal) |u8char, i| 
-    {
-        result[i] = c_ushort(u8char);
-    }
-    return result;
-}
-
-fn RenderWeirdGradient(XOffset: u32, YOffset: u32) void
-{
-    var Pitch: usize = @intCast(usize, BitmapWidth) * 4;
-    var Row = @ptrCast([*]u8, BitmapMemory);
-    var Y: i32 = 0;
-    while (Y < BitmapHeight) 
-    {
-        var X: i32 = 0;
-        var Pixel = @ptrCast([*]u32, @alignCast(4, Row));
-        
-        while (X < BitmapWidth)
-        {
-            //Blue
-            var Blue = @intCast(u32, @truncate(u8, @intCast(u32, X) + XOffset));
-            var Green = @intCast(u32, @truncate(u8, @intCast(u32, Y) + YOffset));
-
-            Pixel.* = Green << 8 | Blue;
-            Pixel += 1;
-
-            X += 1;
-        }
-        Row += Pitch;
-        Y += 1;
-    }
-}
-
-fn Win32ResizeDIBSection(Width: c_int, Height: c_int) void 
-{
-    if(BitmapMemory != null) 
-    {
-        const result = w32f.VirtualFree(BitmapMemory, 0, w32c.MEM_RELEASE);
-        if (result == 0) 
-        {
-            const errorcode = w32f.GetLastError();
-            w32f.OutputDebugStringA(c"VirtualFree of BitmapMemory failed.\n");
-        }
-    }
-
-    BitmapWidth = Width;
-    BitmapHeight = Height;
-
-    BitmapInfo = BITMAPINFO {
+var GlobalBackBuffer = win32_offscreen_buffer {
+    .Info = BITMAPINFO {
         .bmiHeader = BITMAPINFOHEADER {
             .biSize = undefined,
-            .biWidth = BitmapWidth,
-            .biHeight = -BitmapHeight,
-            .biPlanes = 1,
-            .biBitCount = 32,
-            .biCompression = 0x0000,
+            .biWidth = 0,
+            .biHeight = 0,
+            .biPlanes = 0,
+            .biBitCount = 0,
+            .biCompression = 0,
             .biSizeImage = 0,
             .biXPelsPerMeter = 0,
             .biYPelsPerMeter = 0,
@@ -103,23 +64,99 @@ fn Win32ResizeDIBSection(Width: c_int, Height: c_int) void
                 .rgbReserved = 0,
             }
         },
-    };
+    },
+    .Memory = null,
+    .Width = 0,
+    .Height = 0,
+    .Pitch = 0,
+    .BytesPerPixel = 0,
+};
 
-    BitmapInfo.bmiHeader.biSize = @sizeOf(BITMAPINFOHEADER);
-    const BitmapMemorySize = @intCast(c_ulonglong, (BitmapWidth * BitmapHeight)) * 4;
-    BitmapMemory = w32f.VirtualAlloc(null, BitmapMemorySize, w32c.MEM_COMMIT, w32c.PAGE_READWRITE);
+fn w32str(comptime string_literal: []u8) []const c_ushort 
+{
+    var result = []const c_ushort {'a'} ** string_literal.len;
+    for (string_literal) |u8char, i| 
+    {
+        result[i] = c_ushort(u8char);
+    }
+    return result;
 }
 
-fn Win32UpdateWindow(DeviceContext: HDC, ClientRect: *const RECT) void 
+fn Win32GetWindowDimension(Window: HWND) win32_window_dimension
 {
-    const WindowWidth = ClientRect.right - ClientRect.left;
-    const WindowHeight = ClientRect.bottom - ClientRect.top;
+    var ClientRect = RECT {
+        .left = 0,
+        .right = 0,
+        .top = 0,
+        .bottom = 0,
+    };
+    const ignored = w32f.GetClientRect(Window, &ClientRect);
+    return win32_window_dimension {
+        .Width = ClientRect.right - ClientRect.left,
+        .Height = ClientRect.bottom - ClientRect.top,
+    };
+}
+
+fn RenderWeirdGradient(Buffer: *win32_offscreen_buffer, XOffset: u32, YOffset: u32) void
+{
+    var Row = @ptrCast([*]u8, Buffer.Memory);
+    var Y: i32 = 0;
+    while (Y < Buffer.Height) 
+    {
+        var X: i32 = 0;
+        var Pixel = @ptrCast([*]u32, @alignCast(4, Row));
+        
+        while (X < Buffer.Width)
+        {
+            //Blue
+            var Blue = @intCast(u32, @truncate(u8, @intCast(u32, X) + XOffset));
+            var Green = @intCast(u32, @truncate(u8, @intCast(u32, Y) + YOffset));
+
+            Pixel.* = Green << 8 | Blue;
+            Pixel += 1;
+
+            X += 1;
+        }
+        Row += Buffer.Pitch;
+        Y += 1;
+    }
+}
+
+fn Win32ResizeDIBSection(Buffer: *win32_offscreen_buffer, Width: c_int, Height: c_int) void 
+{
+    if(Buffer.Memory != null) 
+    {
+        const result = w32f.VirtualFree(Buffer.Memory, 0, w32c.MEM_RELEASE);
+        if (result == 0) 
+        {
+            const errorcode = w32f.GetLastError();
+            w32f.OutputDebugStringA(c"VirtualFree of Buffer.Memory failed.\n");
+        }
+    }
+
+    Buffer.Width = Width;
+    Buffer.Height = Height;
+    Buffer.Info.bmiHeader.biWidth = Width;
+    Buffer.Info.bmiHeader.biHeight = -Height;
+    Buffer.Info.bmiHeader.biPlanes = 1;
+    Buffer.Info.bmiHeader.biBitCount = 32;
+    Buffer.Info.bmiHeader.biSize = @sizeOf(BITMAPINFOHEADER);
+    Buffer.BytesPerPixel = 4;
+    Buffer.Pitch = @intCast(usize, Width * Buffer.BytesPerPixel);
+
+    const BufferMemorySize = @intCast(c_ulonglong, (Buffer.Width * Buffer.Height) * Buffer.BytesPerPixel);
+    Buffer.Memory = w32f.VirtualAlloc(null, BufferMemorySize, w32c.MEM_COMMIT, w32c.PAGE_READWRITE);
+}
+
+fn Win32DisplayBufferInWindow(Buffer: win32_offscreen_buffer, DeviceContext: HDC, Width: c_int, Height: c_int) void 
+{
+    
     const result = w32f.StretchDIBits(
         DeviceContext,
-        0, 0, BitmapWidth, BitmapHeight,
-        0, 0, WindowWidth, WindowHeight,
-        BitmapMemory,
-        BitmapInfo,
+        0, 0, Width, Height,
+        0, 0, Buffer.Width, Buffer.Height,
+        Buffer.Memory,
+        Buffer.Info,
         w32c.DIB_RGB_COLORS,
         SRCCOPY,
     );
@@ -138,16 +175,7 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
     var Result = LRESULT(0);
     switch(Message) {
         w32c.WM_SIZE => {
-            var ClientRect = RECT {
-                .left = 0,
-                .right = 0,
-                .top = 0,
-                .bottom = 0,
-            };
-            const ignored = w32f.GetClientRect(Window, &ClientRect);
-            const Width = ClientRect.right - ClientRect.left;
-            const Height = ClientRect.bottom - ClientRect.top;
-            Win32ResizeDIBSection(Width, Height);
+            
         },
         w32c.WM_DESTROY => {
             // crashed?
@@ -160,15 +188,7 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
         w32c.WM_ACTIVATEAPP => {
             w32f.OutputDebugStringA(c"WM_ACTIVATEAPP\n");
         },
-        w32c.WM_PAINT => {
-            var ClientRect = RECT {
-                .left = 0,
-                .right = 0,
-                .top = 0,
-                .bottom = 0,
-            };
-
-            
+        w32c.WM_PAINT => {           
             var Paint = PAINTSTRUCT {
                 .hdc = null,
                 .fErase = BOOL(0),
@@ -179,8 +199,13 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
             };
 
             var DeviceContext = w32f.BeginPaint(Window, &Paint);
-            const ignored = w32f.GetClientRect(Window, &ClientRect);
-            Win32UpdateWindow(DeviceContext, &ClientRect);
+
+            const Dimension = Win32GetWindowDimension(Window);
+            Win32DisplayBufferInWindow(GlobalBackBuffer, 
+                                       DeviceContext, 
+                                       Dimension.Width,
+                                       Dimension.Height);
+
             const ignored2 = w32f.EndPaint(Window, &Paint);
         },
         else => {
@@ -198,7 +223,7 @@ pub export fn WinMain(Instance: HINSTANCE,
     const ClassNamePtr = (comptime w32str(&"HandmadeHeroWindowClass"))[0..].ptr;
 
     const WindowClass = WNDCLASSW {
-        .style = 0,
+        .style = w32c.CS_HREDRAW | w32c.CS_VREDRAW,
         .lpfnWndProc = Win32MainWindowCallback,
         .cbClsExtra = 0,
         .cbWndExtra = 0,
@@ -209,6 +234,8 @@ pub export fn WinMain(Instance: HINSTANCE,
         .lpszMenuName = null,
         .lpszClassName = ClassNamePtr,
     };
+
+    Win32ResizeDIBSection(&GlobalBackBuffer, 1280, 720);
 
     const atom = w32f.RegisterClassW(&WindowClass);
     if (atom != 0) 
@@ -250,17 +277,18 @@ pub export fn WinMain(Instance: HINSTANCE,
                     MessageResult = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
                 }
                 
-                RenderWeirdGradient(XOffset, YOffset);
+                RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
+                
                 const DeviceContext = w32f.GetDC(Window);
-                var ClientRect = RECT {
-                    .left = 0,
-                    .right = 0,
-                    .top = 0,
-                    .bottom = 0,
-                };
-                const ignored3 = w32f.GetClientRect(Window, &ClientRect);
-                Win32UpdateWindow(DeviceContext, &ClientRect);
+                
+                var Dimension = Win32GetWindowDimension(Window);
+                Win32DisplayBufferInWindow(GlobalBackBuffer, 
+                                           DeviceContext, 
+                                           Dimension.Width,
+                                           Dimension.Height);
+
                 const ignored4 = w32f.ReleaseDC(Window, DeviceContext);
+
                 XOffset = XOffset +% 1;
                 YOffset = YOffset +% 1;
             }
