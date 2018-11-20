@@ -3,25 +3,48 @@ use @import("lib/win32/win32_types.zig");
 const w32f = @import("lib/win32/win32_functions.zig");
 const w32c = @import("lib/win32/win32_constants.zig");
 
-// /* Ternary raster operations */
-// #define SRCCOPY             (DWORD)0x00CC0020 /* dest = source                   */
-// #define SRCPAINT            (DWORD)0x00EE0086 /* dest = source OR dest           */
-// #define SRCAND              (DWORD)0x008800C6 /* dest = source AND dest          */
-// #define SRCINVERT           (DWORD)0x00660046 /* dest = source XOR dest          */
-// #define SRCERASE            (DWORD)0x00440328 /* dest = source AND (NOT dest )   */
-// #define NOTSRCCOPY          (DWORD)0x00330008 /* dest = (NOT source)             */
-// #define NOTSRCERASE         (DWORD)0x001100A6 /* dest = (NOT src) AND (NOT dest) */
-// #define MERGECOPY           (DWORD)0x00C000CA /* dest = (source AND pattern)     */
-// #define MERGEPAINT          (DWORD)0x00BB0226 /* dest = (NOT source) OR dest     */
-// #define PATCOPY             (DWORD)0x00F00021 /* dest = pattern                  */
-// #define PATPAINT            (DWORD)0x00FB0A09 /* dest = DPSnoo                   */
-// #define PATINVERT           (DWORD)0x005A0049 /* dest = pattern XOR dest         */
-// #define DSTINVERT           (DWORD)0x00550009 /* dest = (NOT dest)               */
-// #define BLACKNESS           (DWORD)0x00000042 /* dest = BLACK                    */
-// #define WHITENESS (DWORD)0x00FF0062 /* dest = WHITE                    */
-// WHITENESS wasn't in MajorLag's win32 constants! What a slacker.
-const WHITENESS: DWORD = 0x00FF0062;
 const SRCCOPY: DWORD = 0x00CC0020;
+
+// wButtons bitmask
+const XINPUT_GAMEPAD_DPAD_UP: WORD        = 0x0001;
+const XINPUT_GAMEPAD_DPAD_DOWN: WORD      = 0x0002;
+const XINPUT_GAMEPAD_DPAD_LEFT: WORD      = 0x0004;
+const XINPUT_GAMEPAD_DPAD_RIGHT: WORD     = 0x0008;
+const XINPUT_GAMEPAD_START: WORD          = 0x0010;
+const XINPUT_GAMEPAD_BACK: WORD           = 0x0020;
+const XINPUT_GAMEPAD_LEFT_THUMB: WORD     = 0x0040;
+const XINPUT_GAMEPAD_RIGHT_THUMB: WORD    = 0x0080;
+const XINPUT_GAMEPAD_LEFT_SHOULDER: WORD  = 0x0100;
+const XINPUT_GAMEPAD_RIGHT_SHOULDER: WORD = 0x0200;
+const XINPUT_GAMEPAD_A: WORD              = 0x1000;
+const XINPUT_GAMEPAD_B: WORD              = 0x2000;
+const XINPUT_GAMEPAD_X: WORD              = 0x4000;
+const XINPUT_GAMEPAD_Y: WORD              = 0x8000;
+
+const XINPUT_VIBRATION = struct {
+  wLeftMotorSpeed: WORD,
+  wRightMotorSpeed: WORD,
+};
+
+const XINPUT_GAMEPAD = struct {
+  wButtons: WORD,
+  bLeftTrigger: BYTE,
+  bRightTrigger: BYTE,
+  sThumbLX: SHORT,
+  sThumbLY: SHORT,
+  sThumbRX: SHORT,
+  sThumbRY: SHORT,
+};
+
+const XINPUT_STATE = struct {
+  dwPacketNumber: DWORD,
+  Gamepad: XINPUT_GAMEPAD,
+};
+
+// NOTE - Casey uses a dynamic load for these, but it seems unneeded since xinput1_4 is completely
+// ubiquitous these days, and since I don't want to fight with zig to get dll loading yet, here we are.
+extern "xinput1_4" stdcallcc fn XInputGetState(dwUserIndex: DWORD, pState: *XINPUT_STATE) DWORD;
+extern "xinput1_4" stdcallcc fn XInputSetState(dwUserIndex: DWORD, pVibration: *XINPUT_VIBRATION) DWORD;
 
 const win32_offscreen_buffer = struct 
 {
@@ -39,57 +62,26 @@ const win32_window_dimension = struct
     Height: c_int,
 };
 
-// globals
-var Running: bool = undefined;
-var GlobalBackBuffer = win32_offscreen_buffer {
-    .Info = BITMAPINFO {
-        .bmiHeader = BITMAPINFOHEADER {
-            .biSize = undefined,
-            .biWidth = 0,
-            .biHeight = 0,
-            .biPlanes = 0,
-            .biBitCount = 0,
-            .biCompression = 0,
-            .biSizeImage = 0,
-            .biXPelsPerMeter = 0,
-            .biYPelsPerMeter = 0,
-            .biClrUsed = 0,
-            .biClrImportant = 0,
-        },
-        .bmiColors = [1]RGBQUAD { 
-            RGBQUAD {
-                .rgbBlue = 0,
-                .rgbGreen = 0,
-                .rgbRed = 0,
-                .rgbReserved = 0,
-            }
-        },
-    },
-    .Memory = null,
-    .Width = 0,
-    .Height = 0,
-    .Pitch = 0,
-    .BytesPerPixel = 0,
-};
+
+// global variables, baby
+var GlobalRunning: bool = undefined;
+var GlobalBackBuffer: win32_offscreen_buffer = undefined;
+
 
 fn w32str(comptime string_literal: []u8) []const c_ushort 
 {
-    var result = []const c_ushort {'a'} ** string_literal.len;
+    var result = []const c_ushort {'a'} ** (string_literal.len + 1);
     for (string_literal) |u8char, i| 
     {
         result[i] = c_ushort(u8char);
     }
+    result[string_literal.len] = 0;
     return result;
 }
 
 fn Win32GetWindowDimension(Window: HWND) win32_window_dimension
 {
-    var ClientRect = RECT {
-        .left = 0,
-        .right = 0,
-        .top = 0,
-        .bottom = 0,
-    };
+    var ClientRect: RECT = undefined;
     const ignored = w32f.GetClientRect(Window, &ClientRect);
     return win32_window_dimension {
         .Width = ClientRect.right - ClientRect.left,
@@ -150,7 +142,7 @@ fn Win32ResizeDIBSection(Buffer: *win32_offscreen_buffer, Width: c_int, Height: 
 
 fn Win32DisplayBufferInWindow(Buffer: win32_offscreen_buffer, DeviceContext: HDC, Width: c_int, Height: c_int) void 
 {
-    
+
     const result = w32f.StretchDIBits(
         DeviceContext,
         0, 0, Width, Height,
@@ -167,6 +159,30 @@ fn Win32DisplayBufferInWindow(Buffer: win32_offscreen_buffer, DeviceContext: HDC
     }
 }
 
+fn HandleKey(VKCode: WPARAM, LParam: LPARAM) void
+{
+    const WasDown = LParam & (1 << 30) != 0;
+    const IsDown = LParam & (1 << 31) == 0;
+    if (IsDown == WasDown) {
+        return;
+    }
+    switch(VKCode) {
+        'W' => {},
+        'A' => {},
+        'S' => {},
+        'D' => {},
+        w32c.VK_UP => {},
+        w32c.VK_LEFT => {},
+        w32c.VK_DOWN => {},
+        w32c.VK_RIGHT => {},
+        w32c.VK_ESCAPE => {
+            w32f.OutputDebugStringA(c"Escape Pressed!\n");
+        },
+        w32c.VK_SPACE => {},
+        else => {}
+    }
+}
+
 pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
                                          Message: UINT,
                                          WParam: WPARAM,
@@ -179,24 +195,29 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
         },
         w32c.WM_DESTROY => {
             // crashed?
-            Running = false;
+            GlobalRunning = false;
         },
         w32c.WM_CLOSE => {
             // closed by user
-            Running = false;
+            GlobalRunning = false;
         },
         w32c.WM_ACTIVATEAPP => {
             w32f.OutputDebugStringA(c"WM_ACTIVATEAPP\n");
         },
+        w32c.WM_SYSKEYDOWN => {
+            HandleKey(WParam, LParam);
+        },
+        w32c.WM_SYSKEYUP => {
+            HandleKey(WParam, LParam);
+        },
+        w32c.WM_KEYDOWN => {
+            HandleKey(WParam, LParam);
+        },
+        w32c.WM_KEYUP => {
+            HandleKey(WParam, LParam);
+        },
         w32c.WM_PAINT => {           
-            var Paint = PAINTSTRUCT {
-                .hdc = null,
-                .fErase = BOOL(0),
-                .rcPaint = undefined,
-                .fRestore = BOOL(0),
-                .fIncUpdate = BOOL(0),
-                .rgbReserved = []u8 {0} ** 32,
-            };
+            var Paint: PAINTSTRUCT = undefined;
 
             var DeviceContext = w32f.BeginPaint(Window, &Paint);
 
@@ -206,6 +227,7 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
                                        Dimension.Width,
                                        Dimension.Height);
 
+            // Releases the DC as well.
             const ignored2 = w32f.EndPaint(Window, &Paint);
         },
         else => {
@@ -220,20 +242,14 @@ pub export fn WinMain(Instance: HINSTANCE,
                       CommandLine: LPSTR, 
                       ShowCode: c_int) c_int 
 {
+    var Result: c_int = 0;
     const ClassNamePtr = (comptime w32str(&"HandmadeHeroWindowClass"))[0..].ptr;
 
-    const WindowClass = WNDCLASSW {
-        .style = w32c.CS_HREDRAW | w32c.CS_VREDRAW,
-        .lpfnWndProc = Win32MainWindowCallback,
-        .cbClsExtra = 0,
-        .cbWndExtra = 0,
-        .hInstance = Instance,
-        .hIcon = null,
-        .hCursor = null,
-        .hbrBackground = null,
-        .lpszMenuName = null,
-        .lpszClassName = ClassNamePtr,
-    };
+    var WindowClass: WNDCLASSW = undefined;
+    WindowClass.style = w32c.CS_HREDRAW | w32c.CS_VREDRAW | w32c.CS_OWNDC;
+    WindowClass.lpfnWndProc = Win32MainWindowCallback;
+    WindowClass.hInstance = Instance;
+    WindowClass.lpszClassName = ClassNamePtr;
 
     Win32ResizeDIBSection(&GlobalBackBuffer, 1280, 720);
 
@@ -253,44 +269,90 @@ pub export fn WinMain(Instance: HINSTANCE,
                 null,
                 null,
                 Instance,
-                null);
+                null
+            );
 
         if (Window != null) 
         {
-            Running = true;
+            const DeviceContext = w32f.GetDC(Window);
+            defer { const ignored = w32f.ReleaseDC(Window, DeviceContext); }
+
+            GlobalRunning = true;
             var XOffset: u32 = 0;
             var YOffset: u32 = 0;
-            while(Running) {
+            while(GlobalRunning) 
+            {
+
+
+                // Process OS messages
                 var Message: MSG = undefined;
                 var MessageResult: BOOL = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
-
                 while (MessageResult != 0)
                 {
-                    // why not handle this in the callback?
                     if (Message.message == w32c.WM_QUIT)
                     {
-                        Running = false;
+                        GlobalRunning = false;
+                        Result = @intCast(c_int, Message.wParam);
+                        MessageResult = 0;
+                    } 
+                    else
+                    {
+                        const ignored1 = w32f.TranslateMessage(&Message);
+                        const ignored2 = w32f.DispatchMessageW(&Message);
+                        MessageResult = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
                     }
+                }
 
-                    const ignored1 = w32f.TranslateMessage(&Message);
-                    const ignored2 = w32f.DispatchMessageW(&Message);
-                    MessageResult = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
+
+                // Poll controllers
+                const num_controllers = 4;
+                var ControllerIndex: u32 = 0;
+                while(ControllerIndex < num_controllers) 
+                {
+                    var ControllerState: XINPUT_STATE = undefined;
+
+                    const errorcode = XInputGetState(ControllerIndex, &ControllerState);
+                    if(errorcode == w32c.ERROR_SUCCESS)
+                    {
+                        const Pad = ControllerState.Gamepad;
+                        const Up            = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
+                        const Down          = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+                        const Left          = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+                        const Right         = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
+                        const Start         = (Pad.wButtons & XINPUT_GAMEPAD_START) != 0;
+                        const Back          = (Pad.wButtons & XINPUT_GAMEPAD_BACK) != 0;
+                        const LeftShoulder  = (Pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+                        const RightShoulder = (Pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+                        const AButton       = (Pad.wButtons & XINPUT_GAMEPAD_A) != 0;
+                        const BButton       = (Pad.wButtons & XINPUT_GAMEPAD_B) != 0;
+                        const XButton       = (Pad.wButtons & XINPUT_GAMEPAD_X) != 0;
+                        const YButton       = (Pad.wButtons & XINPUT_GAMEPAD_Y) != 0;
+
+                        const StickX = Pad.sThumbLX;
+                        const StickY = Pad.sThumbLY;
+
+                        if(AButton) 
+                        {
+                            YOffset = YOffset +% 2;
+                        }
+                    }
+                    else
+                    {
+                        // controller not available
+                    }
+                    ControllerIndex += 1;
                 }
                 
+
+                // Render
                 RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
-                
-                const DeviceContext = w32f.GetDC(Window);
-                
-                var Dimension = Win32GetWindowDimension(Window);
+                const Dimension = Win32GetWindowDimension(Window);
                 Win32DisplayBufferInWindow(GlobalBackBuffer, 
                                            DeviceContext, 
                                            Dimension.Width,
                                            Dimension.Height);
-
-                const ignored4 = w32f.ReleaseDC(Window, DeviceContext);
-
+                                           
                 XOffset = XOffset +% 1;
-                YOffset = YOffset +% 1;
             }
         } 
         else 
@@ -301,9 +363,7 @@ pub export fn WinMain(Instance: HINSTANCE,
     } 
     else 
     {
-        const errorcode = w32f.GetLastError();
         w32f.OutputDebugStringA(c"No atom\n");
     }
-
-    return 0;
+    return Result;
 }
