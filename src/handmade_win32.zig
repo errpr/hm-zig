@@ -45,6 +45,11 @@ const XINPUT_STATE = struct {
 // ubiquitous these days, and since I don't want to fight with zig to get dll loading yet, here we are.
 extern "xinput1_4" stdcallcc fn XInputGetState(dwUserIndex: DWORD, pState: *XINPUT_STATE) DWORD;
 extern "xinput1_4" stdcallcc fn XInputSetState(dwUserIndex: DWORD, pVibration: *XINPUT_VIBRATION) DWORD;
+extern "xinput1_4" stdcallcc fn XInputEnable(enable: BOOL) void;
+
+// fn XInputGetState(dwUserIndex: DWORD, pState: *XINPUT_STATE) DWORD { return 0; }
+// fn XInputSetState(dwUserIndex: DWORD, pVibration: *XINPUT_VIBRATION) DWORD { return 0; }
+// fn XInputEnable(enable: BOOL) void { return 0; };
 
 const win32_offscreen_buffer = struct 
 {
@@ -202,7 +207,8 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
             GlobalRunning = false;
         },
         w32c.WM_ACTIVATEAPP => {
-            w32f.OutputDebugStringA(c"WM_ACTIVATEAPP\n");
+            // gained or lost focus
+            XInputEnable(@intCast(BOOL, WParam));
         },
         w32c.WM_SYSKEYDOWN => {
             HandleKey(WParam, LParam);
