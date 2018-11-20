@@ -243,24 +243,23 @@ pub export fn WinMain(Instance: HINSTANCE,
                       ShowCode: c_int) c_int 
 {
     var Result: c_int = 0;
-    const ClassNamePtr = (comptime w32str(&"HandmadeHeroWindowClass"))[0..].ptr;
 
-    var WindowClass: WNDCLASSW = undefined;
+    var WindowClass: WNDCLASSA = undefined;
     WindowClass.style = w32c.CS_HREDRAW | w32c.CS_VREDRAW | w32c.CS_OWNDC;
     WindowClass.lpfnWndProc = Win32MainWindowCallback;
     WindowClass.hInstance = Instance;
-    WindowClass.lpszClassName = ClassNamePtr;
+    WindowClass.lpszClassName = c"HandmadeHeroClass";
 
     Win32ResizeDIBSection(&GlobalBackBuffer, 1280, 720);
 
-    const atom = w32f.RegisterClassW(&WindowClass);
+    const atom = w32f.RegisterClassA(&WindowClass);
     if (atom != 0) 
     {
         const Window = 
-            w32f.CreateWindowExW(
+            w32f.CreateWindowExA(
                 DWORD(0), 
-                ClassNamePtr,
-                (comptime w32str(&"Handmade Hero"))[0..].ptr,
+                c"HandmadeHeroClass",
+                c"Handmade Hero",
                 @bitCast(DWORD, w32c.WS_OVERLAPPEDWINDOW|w32c.WS_VISIBLE),
                 w32c.CW_USEDEFAULT,
                 w32c.CW_USEDEFAULT,
@@ -271,7 +270,8 @@ pub export fn WinMain(Instance: HINSTANCE,
                 Instance,
                 null
             );
-
+        defer { const ignored = w32f.DestroyWindow(Window); }
+        
         if (Window != null) 
         {
             const DeviceContext = w32f.GetDC(Window);
