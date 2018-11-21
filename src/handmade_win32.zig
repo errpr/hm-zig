@@ -3,6 +3,9 @@ use @import("lib/win32/win32_types.zig");
 const w32f = @import("lib/win32/win32_functions.zig");
 const w32c = @import("lib/win32/win32_constants.zig");
 
+pub const FARPROC = *@OpaqueType();
+extern "kernel32" stdcallcc fn GetProcAddress(hModule: HMODULE, lpProcName: LPCSTR) FARPROC;
+
 const SRCCOPY: DWORD = 0x00CC0020;
 
 // wButtons bitmask
@@ -41,15 +44,17 @@ const XINPUT_STATE = struct {
   Gamepad: XINPUT_GAMEPAD,
 };
 
-// NOTE - Casey uses a dynamic load for these, but it seems unneeded since xinput1_4 is completely
-// ubiquitous these days, and since I don't want to fight with zig to get dll loading yet, here we are.
-extern "xinput1_4" stdcallcc fn XInputGetState(dwUserIndex: DWORD, pState: *XINPUT_STATE) DWORD;
-extern "xinput1_4" stdcallcc fn XInputSetState(dwUserIndex: DWORD, pVibration: *XINPUT_VIBRATION) DWORD;
-extern "xinput1_4" stdcallcc fn XInputEnable(enable: BOOL) void;
+const XInputGetStateType = stdcallcc fn (dwUserIndex: DWORD, pState: *XINPUT_STATE) DWORD;
+const XInputSetStateType = stdcallcc fn (dwUserIndex: DWORD, pVibration: *XINPUT_VIBRATION) DWORD;
+const XInputEnableType   = stdcallcc fn (enable: BOOL) void;
+var XInputGetState: XInputGetStateType = undefined;
+var XInputSetState: XInputSetStateType = undefined;
+var XInputEnable: XInputEnableType = undefined;
+
 
 // fn XInputGetState(dwUserIndex: DWORD, pState: *XINPUT_STATE) DWORD { return 0; }
 // fn XInputSetState(dwUserIndex: DWORD, pVibration: *XINPUT_VIBRATION) DWORD { return 0; }
-// fn XInputEnable(enable: BOOL) void { return 0; };
+// fn XInputEnable(enable: BOOL) void { return; }
 
 const win32_offscreen_buffer = struct 
 {
@@ -82,6 +87,18 @@ fn w32str(comptime string_literal: []u8) []const c_ushort
     }
     result[string_literal.len] = 0;
     return result;
+}
+
+fn Win32LoadXInput() void
+{
+    // NOTE - using 1_3 because it doesn't stall on exit.
+    const XInputLibrary = w32f.LoadLibraryA(c"xinput1_3.dll");
+    if  (XInputLibrary != null)
+    {
+        XInputGetState = @ptrCast(XInputGetStateType, GetProcAddress(XInputLibrary, c"XInputGetState"));
+        XInputSetState = @ptrCast(XInputSetStateType, GetProcAddress(XInputLibrary, c"XInputSetState"));
+        XInputEnable = @ptrCast(XInputEnableType, GetProcAddress(XInputLibrary, c"XInputEnable"));
+    }
 }
 
 fn Win32GetWindowDimension(Window: HWND) win32_window_dimension
@@ -237,7 +254,7 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
             const ignored2 = w32f.EndPaint(Window, &Paint);
         },
         else => {
-            Result = w32f.DefWindowProcW(Window, Message, WParam, LParam);
+            Result = w32f.DefWindowProcA(Window, Message, WParam, LParam);
         },
     }
     return Result;
@@ -249,6 +266,8 @@ pub export fn WinMain(Instance: HINSTANCE,
                       ShowCode: c_int) c_int 
 {
     var Result: c_int = 0;
+
+    Win32LoadXInput();
 
     var WindowClass: WNDCLASSA = undefined;
     WindowClass.style = w32c.CS_HREDRAW | w32c.CS_VREDRAW | w32c.CS_OWNDC;
