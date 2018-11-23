@@ -51,10 +51,28 @@ var XInputGetState: XInputGetStateType = undefined;
 var XInputSetState: XInputSetStateType = undefined;
 var XInputEnable: XInputEnableType = undefined;
 
+fn Win32LoadXInput() void
+{
+    // NOTE - using 1_3 because it doesn't stall on exit.
+    var XInputLibrary = w32f.LoadLibraryA(c"xinput1_3.dll");
+    
+    if (XInputLibrary == null)
+    {
+        XInputLibrary = w32f.LoadLibraryA(c"xinput1_4.dll");
+    }
 
-// fn XInputGetState(dwUserIndex: DWORD, pState: *XINPUT_STATE) DWORD { return 0; }
-// fn XInputSetState(dwUserIndex: DWORD, pVibration: *XINPUT_VIBRATION) DWORD { return 0; }
-// fn XInputEnable(enable: BOOL) void { return; }
+
+    if (XInputLibrary != null)
+    {
+        XInputGetState = @ptrCast(XInputGetStateType, GetProcAddress(XInputLibrary, c"XInputGetState"));
+        XInputSetState = @ptrCast(XInputSetStateType, GetProcAddress(XInputLibrary, c"XInputSetState"));
+        XInputEnable = @ptrCast(XInputEnableType, GetProcAddress(XInputLibrary, c"XInputEnable"));
+    }
+    else
+    {
+        w32f.OutputDebugStringA(c"Couldn\'t load xinput dll.\n");
+    }
+}
 
 const win32_offscreen_buffer = struct 
 {
@@ -72,32 +90,216 @@ const win32_window_dimension = struct
     Height: c_int,
 };
 
-
 // global variables, baby
 var GlobalRunning: bool = undefined;
 var GlobalBackBuffer: win32_offscreen_buffer = undefined;
 
 
-fn w32str(comptime string_literal: []u8) []const c_ushort 
+// Stuff for direct sound COM interface
+const DSBCAPS = extern struct 
 {
-    var result = []const c_ushort {'a'} ** (string_literal.len + 1);
-    for (string_literal) |u8char, i| 
-    {
-        result[i] = c_ushort(u8char);
-    }
-    result[string_literal.len] = 0;
-    return result;
-}
+    dwSize: DWORD,
+    dwFlags: DWORD,
+    dwBufferBytes: DWORD,
+    dwUnlockTransferRate: DWORD,
+    dwPlayCpuOverhead: DWORD,
+};
+const LPDSBCAPS = *DSBCAPS;
 
-fn Win32LoadXInput() void
+const DSBUFFERDESC = extern struct 
 {
-    // NOTE - using 1_3 because it doesn't stall on exit.
-    const XInputLibrary = w32f.LoadLibraryA(c"xinput1_3.dll");
-    if  (XInputLibrary != null)
+    dwSize: DWORD,
+    dwFlags: DWORD,
+    dwBufferBytes: DWORD,
+    dwReserved: DWORD,
+    lpwfxFormat: LPWAVEFORMATEX,
+};
+const LPDSBUFFERDESC = *DSBUFFERDESC;
+const LPCDSBUFFERDESC = *DSBUFFERDESC;
+
+const IDirectSoundBufferVtbl = extern struct 
+{
+    QueryInterface:         extern fn(?*IDirectSoundBuffer, ?*const IID, ?*(?*c_void)) HRESULT,
+    AddRef:                 extern fn(?*IDirectSoundBuffer) ULONG,
+    Release:                extern fn(?*IDirectSoundBuffer) ULONG,
+    GetCaps:                extern fn(?*IDirectSoundBuffer, pDSBufferCaps: LPDSBCAPS) HRESULT,
+    GetCurrentPosition:     extern fn(?*IDirectSoundBuffer, pdwCurrentPlayCursor: LPDWORD, pdwCurrentWriteCursor: LPDWORD) HRESULT,
+    GetFormat:              extern fn(?*IDirectSoundBuffer, pwfxFormat: LPWAVEFORMATEX, dwSizeAllocated: DWORD, pdwSizeWritten: LPDWORD) HRESULT,
+    GetVolume:              extern fn(?*IDirectSoundBuffer, plVolume: LPLONG) HRESULT,
+    GetPan:                 extern fn(?*IDirectSoundBuffer, plPan: LPLONG) HRESULT,
+    GetFrequency:           extern fn(?*IDirectSoundBuffer, pdwFrequency: LPDWORD) HRESULT,
+    GetStatus:              extern fn(?*IDirectSoundBuffer, pdwStatus: LPDWORD) HRESULT,
+    Initialize:             extern fn(?*IDirectSoundBuffer, pDirectSound: *IDirectSound, pcDSBufferDesc: LPCDSBUFFERDESC) HRESULT,
+    Lock:                   extern fn(?*IDirectSoundBuffer, dwOffset: DWORD, dwBytes: DWORD, 
+                                        ppvAudioPtr1: *LPVOID, pdwAudioBytes1: LPDWORD, 
+                                        ppvAudioPtr2: *LPVOID, pdwAudioBytes2: LPDWORD,
+                                        dwFlags: DWORD) HRESULT,
+    Play:                   extern fn(?*IDirectSoundBuffer, dwReserved1: DWORD, dwPriority: DWORD, dwFlags: DWORD) HRESULT,
+    SetCurrentPosition:     extern fn(?*IDirectSoundBuffer, dwNewPosition: DWORD) HRESULT,
+    SetFormat:              extern fn(?*IDirectSoundBuffer, pcfxFormat: LPCWAVEFORMATEX) HRESULT,
+    SetVolume:              extern fn(?*IDirectSoundBuffer, lVolume: LONG) HRESULT,
+    SetPan:                 extern fn(?*IDirectSoundBuffer, lPan: LONG) HRESULT,
+    SetFrequency:           extern fn(?*IDirectSoundBuffer, dwFrequency: DWORD) HRESULT,
+    Stop:                   extern fn(?*IDirectSoundBuffer) HRESULT,
+    Unlock:                 extern fn(?*IDirectSoundBuffer, pvAudioPtr1: LPVOID, dwAudioBytes1: DWORD, pvAudioPtr2: LPVOID, dwAudioBytes2: DWORD) HRESULT,
+    Restore:                extern fn(?*IDirectSoundBuffer) HRESULT,
+};
+const IDirectSoundBuffer = extern struct 
+{
+    lpVtbl: ?*IDirectSoundBufferVtbl,
+};
+const LPDIRECTSOUNDBUFFER = *IDirectSoundBuffer;
+const LPLPDIRECTSOUNDBUFFER = *LPDIRECTSOUNDBUFFER;
+
+const DSCAPS = extern struct 
+{
+    dwSize: DWORD,
+    dwFlags: DWORD,
+    dwMinSecondarySampleRate: DWORD,
+    dwMaxSecondarySampleRate: DWORD,
+    dwPrimaryBuffers: DWORD,
+    dwMaxHwMixingAllBuffers: DWORD,
+    dwMaxHwMixingStaticBuffers: DWORD,
+    dwMaxHwMixingStreamingBuffers: DWORD,
+    dwFreeHwMixingAllBuffers: DWORD,
+    dwFreeHwMixingStaticBuffers: DWORD,
+    dwFreeHwMixingStreamingBuffers: DWORD,
+    dwMaxHw3DMixingAllBuffers: DWORD,
+    dwMaxHw3DMixingStaticBuffers: DWORD,
+    dwMaxHw3DMixingStreamingBuffers: DWORD,
+    dwFreeHw3DMixingAllBuffers: DWORD,
+    dwFreeHw3DMixingStaticBuffers: DWORD,
+    dwFreeHw3DMixingStreamingBuffers: DWORD,
+    dwTotalHwMemBytes: DWORD,
+    dwFreeHwMemBytes: DWORD,
+    dwMaxContigFreeHwMemBytes: DWORD,
+    dwUnlockTransferRateHwBuffers: DWORD,
+    dwPlayCpuOverheadSwBuffer: DWORD,
+    dwReserved1: DWORD,
+    dwReserved2: DWORD,
+};
+const LPDSCAPS = *DSCAPS;
+const IDirectSoundVtbl = extern struct 
+{
+    // IUnknown methods
+    QueryInterface:         extern fn(?*IDirectSound, ?*const IID, ?*(?*c_void)) HRESULT,
+    AddRef:                 extern fn(?*IDirectSound) ULONG,
+    Release:                extern fn(?*IDirectSound) ULONG,
+
+    // IDirectSound methods
+    CreateSoundBuffer:      extern fn(?*IDirectSound,
+                                       lpcDSBufferDesc: LPCDSBUFFERDESC,
+                                       lplpDirectSoundBuffer: LPLPDIRECTSOUNDBUFFER,
+                                       pUnkOuter: ?*IUnknown) HRESULT,
+    GetCaps:                extern fn(?*IDirectSound, lpDSCaps: LPDSCAPS) HRESULT,    
+    DuplicateSoundBuffer:   extern fn(?*IDirectSound, lpDsbOriginal: LPDIRECTSOUNDBUFFER, lplpDsbDuplicate: LPLPDIRECTSOUNDBUFFER) HRESULT,
+    SetCooperativeLevel:    extern fn(?*IDirectSound, hwnd: HWND, dwLevel: DWORD) HRESULT,    
+    Compact:                extern fn(?*IDirectSound) HRESULT,
+    GetSpeakerConfig:       extern fn(?*IDirectSound, pdwSpeakerConfig: LPDWORD) HRESULT,    
+    SetSpeakerConfig:       extern fn(?*IDirectSound, dwSpeakerConfig: DWORD) HRESULT,
+    Initialize:             extern fn(?*IDirectSound, lpGuid: LPGUID) HRESULT,
+};
+const IDirectSound = extern struct 
+{
+    lpVtbl: ?*IDirectSoundVtbl,
+};
+const LPDIRECTSOUND = *IDirectSound;
+
+const DSSCL_PRIORITY = 0x00000002;
+const DSBCAPS_PRIMARYBUFFER = 0x00000001;
+const WAVE_FORMAT_PCM = WORD(1);
+
+const DirectSoundCreateType = stdcallcc fn (pcGuidDevice: LPCGUID, ppDS: *LPDIRECTSOUND, pUnkOuter: LPUNKNOWN) HRESULT;
+var DirectSoundCreate: DirectSoundCreateType = undefined;
+fn Win32InitDSound(Window: HWND, BufferSize: DWORD, SamplesPerSecond: DWORD) void
+{
+    var DSoundLibrary = w32f.LoadLibraryA(c"dsound.dll");
+    if (DSoundLibrary != null)
     {
-        XInputGetState = @ptrCast(XInputGetStateType, GetProcAddress(XInputLibrary, c"XInputGetState"));
-        XInputSetState = @ptrCast(XInputSetStateType, GetProcAddress(XInputLibrary, c"XInputSetState"));
-        XInputEnable = @ptrCast(XInputEnableType, GetProcAddress(XInputLibrary, c"XInputEnable"));
+        // something about COM
+        DirectSoundCreate = @ptrCast(DirectSoundCreateType, GetProcAddress(DSoundLibrary, c"DirectSoundCreate"));
+
+        var DirectSound: LPDIRECTSOUND = undefined;
+        const hResult = DirectSoundCreate(null, &DirectSound, null);
+        if  (hResult == 0)
+        {
+            var WaveFormat = WAVEFORMATEX {
+                .wFormatTag = WAVE_FORMAT_PCM,
+                .nChannels = 2,
+                .nSamplesPerSec = SamplesPerSecond,
+                .nAvgBytesPerSec = undefined,
+                .nBlockAlign = undefined,
+                .wBitsPerSample = 16,
+                .cbSize = 0,
+            };
+            WaveFormat.nBlockAlign = (WaveFormat.nChannels * WaveFormat.wBitsPerSample) / 8;
+            WaveFormat.nAvgBytesPerSec = WaveFormat.nBlockAlign * WaveFormat.nSamplesPerSec;
+
+            const ds = DirectSound.lpVtbl orelse return;
+            const hResult2 = ds.SetCooperativeLevel(DirectSound, Window, DSSCL_PRIORITY);
+            if(hResult2 == 0)
+            {
+                // Create Primary Buffer
+                var BufferDescription = DSBUFFERDESC {
+                        .dwSize = @sizeOf(DSBUFFERDESC),
+                        .dwFlags = DSBCAPS_PRIMARYBUFFER,
+                        .dwBufferBytes = 0,
+                        .dwReserved = 0,
+                        .lpwfxFormat = null,
+                };
+                var PrimaryBuffer: LPDIRECTSOUNDBUFFER = undefined;
+                const hResult3 = ds.CreateSoundBuffer(DirectSound, &BufferDescription, &PrimaryBuffer, null);
+                if(hResult3 == 0)
+                {
+                    const dsb = PrimaryBuffer.lpVtbl orelse return;
+
+                    const hResult4 = dsb.SetFormat(PrimaryBuffer, &WaveFormat);
+                    if(hResult4 == 0)
+                    {
+
+                    }
+                    else
+                    {
+                        w32f.OutputDebugStringA(c"Failed to set format of primary buffer.\n");
+                    }
+                }
+                else
+                {
+                    w32f.OutputDebugStringA(c"Failed to create primary sound buffer.\n");
+                }
+
+                // Create Secondary Buffer
+                var BufferDescription2 = DSBUFFERDESC {
+                        .dwSize = @sizeOf(DSBUFFERDESC),
+                        .dwFlags = 0,
+                        .dwBufferBytes = BufferSize,
+                        .dwReserved = 0,
+                        .lpwfxFormat = &WaveFormat,
+                };
+                var SecondaryBuffer: LPDIRECTSOUNDBUFFER = undefined;
+                const hResult5 = ds.CreateSoundBuffer(DirectSound, &BufferDescription2, &SecondaryBuffer, null);
+                if(hResult5 == 0)
+                {
+
+                }
+                else
+                {
+                    w32f.OutputDebugStringA(c"Failed to create secondary sound buffer.\n");
+                }
+            }
+            else
+            {
+                w32f.OutputDebugStringA(c"Failed to set cooperative level.\n");
+            }
+        }
+        else
+        {
+            w32f.OutputDebugStringA(c"Failed to create direct sound.\n");
+        }
+    }
+    else
+    {
+        w32f.OutputDebugStringA(c"Failed to load direct sound library.\n");
     }
 }
 
@@ -123,8 +325,8 @@ fn RenderWeirdGradient(Buffer: *win32_offscreen_buffer, XOffset: u32, YOffset: u
         while (X < Buffer.Width)
         {
             //Blue
-            var Blue = @intCast(u32, @truncate(u8, @intCast(u32, X) + XOffset));
-            var Green = @intCast(u32, @truncate(u8, @intCast(u32, Y) + YOffset));
+            var Blue = @intCast(u32, @truncate(u8, @intCast(u32, X) +% XOffset));
+            var Green = @intCast(u32, @truncate(u8, @intCast(u32, Y) +% YOffset));
 
             Pixel.* = Green << 8 | Blue;
             Pixel += 1;
@@ -175,7 +377,7 @@ fn Win32DisplayBufferInWindow(Buffer: win32_offscreen_buffer, DeviceContext: HDC
         SRCCOPY,
     );
 
-    if(result == 0) 
+    if (result == 0) 
     {
         w32f.OutputDebugStringA(c"StretchDIBits returned 0\n");
     }
@@ -185,14 +387,20 @@ fn HandleKey(VKCode: WPARAM, LParam: LPARAM) void
 {
     const WasDown = LParam & (1 << 30) != 0;
     const IsDown = LParam & (1 << 31) == 0;
-    if (IsDown == WasDown) {
+    
+    if (IsDown == WasDown) 
+    {
         return;
     }
-    switch(VKCode) {
+
+    switch (VKCode) 
+    {
         'W' => {},
         'A' => {},
         'S' => {},
         'D' => {},
+        'Q' => {},
+        'E' => {},
         w32c.VK_UP => {},
         w32c.VK_LEFT => {},
         w32c.VK_DOWN => {},
@@ -201,6 +409,13 @@ fn HandleKey(VKCode: WPARAM, LParam: LPARAM) void
             w32f.OutputDebugStringA(c"Escape Pressed!\n");
         },
         w32c.VK_SPACE => {},
+        w32c.VK_F4 => {
+            // check for alt+f4
+            if (LParam & (1 << 29) != 0)
+            {
+                GlobalRunning = false;
+            }
+        },
         else => {}
     }
 }
@@ -211,7 +426,7 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
                                          LParam: LPARAM) LRESULT
 {
     var Result = LRESULT(0);
-    switch(Message) {
+    switch (Message) {
         w32c.WM_SIZE => {
             
         },
@@ -296,16 +511,17 @@ pub export fn WinMain(Instance: HINSTANCE,
                 null
             );
         defer { const ignored = w32f.DestroyWindow(Window); }
-        
         if (Window != null) 
         {
             const DeviceContext = w32f.GetDC(Window);
             defer { const ignored = w32f.ReleaseDC(Window, DeviceContext); }
 
+            Win32InitDSound(Window, 48000, 48000 * @sizeOf(i16) * 2);
+
             GlobalRunning = true;
             var XOffset: u32 = 0;
             var YOffset: u32 = 0;
-            while(GlobalRunning) 
+            while (GlobalRunning) 
             {
 
 
@@ -332,12 +548,12 @@ pub export fn WinMain(Instance: HINSTANCE,
                 // Poll controllers
                 const num_controllers = 4;
                 var ControllerIndex: u32 = 0;
-                while(ControllerIndex < num_controllers) 
+                while (ControllerIndex < num_controllers) 
                 {
                     var ControllerState: XINPUT_STATE = undefined;
 
                     const errorcode = XInputGetState(ControllerIndex, &ControllerState);
-                    if(errorcode == w32c.ERROR_SUCCESS)
+                    if (errorcode == w32c.ERROR_SUCCESS)
                     {
                         const Pad = ControllerState.Gamepad;
                         const Up            = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
@@ -353,13 +569,11 @@ pub export fn WinMain(Instance: HINSTANCE,
                         const XButton       = (Pad.wButtons & XINPUT_GAMEPAD_X) != 0;
                         const YButton       = (Pad.wButtons & XINPUT_GAMEPAD_Y) != 0;
 
-                        const StickX = Pad.sThumbLX;
-                        const StickY = Pad.sThumbLY;
+                        const StickX = @intCast(u32, Pad.sThumbLX >> 12);
+                        const StickY = @intCast(u32, Pad.sThumbLY >> 12);
 
-                        if(AButton) 
-                        {
-                            YOffset = YOffset +% 2;
-                        }
+                        YOffset = YOffset +% StickY;
+                        XOffset = XOffset +% StickX;
                     }
                     else
                     {
