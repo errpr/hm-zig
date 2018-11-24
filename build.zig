@@ -1,8 +1,13 @@
 const Builder = @import("std").build.Builder;
+const builtin = @import("builtin");
 
 pub fn build(b: *Builder) void {
-    const exe = b.addExecutable("handmade", "src/handmade_win32.zig");
+    
+    var exe = b.addExecutable("handmade", "src/handmade_win32.zig");
+
     exe.setBuildMode(b.standardReleaseOptions());
-    b.installArtifact(exe);
+    exe.setVerboseLink(true);
+
     b.default_step.dependOn(&exe.step);
+    b.installArtifact(exe);
 }
