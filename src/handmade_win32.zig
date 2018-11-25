@@ -1,12 +1,8 @@
 const std = @import("std");
+const math = @import("std").math;
 use @import("lib/win32/win32_types.zig");
 const w32f = @import("lib/win32/win32_functions.zig");
 const w32c = @import("lib/win32/win32_constants.zig");
-
-// global variables, baby
-var GlobalRunning: bool = undefined;
-var GlobalBackBuffer: win32_offscreen_buffer = undefined;
-var GlobalSecondaryBuffer: LPDIRECTSOUNDBUFFER = undefined;
 
 const win32_offscreen_buffer = struct 
 {
@@ -23,6 +19,11 @@ const win32_window_dimension = struct
     Width: c_int,
     Height: c_int,
 };
+
+// global variables, baby
+var GlobalRunning: bool = undefined;
+var GlobalBackBuffer: win32_offscreen_buffer = undefined;
+var GlobalSecondaryBuffer: LPDIRECTSOUNDBUFFER = undefined;
 
 pub const FARPROC = *@OpaqueType();
 extern "kernel32" stdcallcc fn GetProcAddress(hModule: HMODULE, lpProcName: LPCSTR) FARPROC;
@@ -46,23 +47,23 @@ const XINPUT_GAMEPAD_X: WORD              = 0x4000;
 const XINPUT_GAMEPAD_Y: WORD              = 0x8000;
 
 const XINPUT_VIBRATION = struct {
-  wLeftMotorSpeed: WORD,
-  wRightMotorSpeed: WORD,
+    wLeftMotorSpeed: WORD,
+    wRightMotorSpeed: WORD,
 };
 
 const XINPUT_GAMEPAD = struct {
-  wButtons: WORD,
-  bLeftTrigger: BYTE,
-  bRightTrigger: BYTE,
-  sThumbLX: SHORT,
-  sThumbLY: SHORT,
-  sThumbRX: SHORT,
-  sThumbRY: SHORT,
+    wButtons: WORD,
+    bLeftTrigger: BYTE,
+    bRightTrigger: BYTE,
+    sThumbLX: SHORT,
+    sThumbLY: SHORT,
+    sThumbRX: SHORT,
+    sThumbRY: SHORT,
 };
 
 const XINPUT_STATE = struct {
-  dwPacketNumber: DWORD,
-  Gamepad: XINPUT_GAMEPAD,
+    dwPacketNumber: DWORD,
+    Gamepad: XINPUT_GAMEPAD,
 };
 
 const XInputGetStateType = stdcallcc fn (dwUserIndex: DWORD, pState: *XINPUT_STATE) DWORD;
@@ -478,6 +479,65 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
     return Result;
 }
 
+//NOTE Casey uses a struct for most of these values, I've deviated and just pass everything as individual parameters.
+fn Win32FillSoundBuffer(ByteToLock: DWORD,  BytesToWrite: DWORD,
+                        ToneVolume: u32,    BytesPerSample: u32, 
+                        WavePeriod: u32,    RunningSampleIndex: *u32, tSine: *f32) void
+{
+    var Region1: ?*c_void = null;
+    var Region1Size: DWORD = 0;
+    var Region2: ?*c_void = null;
+    var Region2Size: DWORD = 0;
+    const dsBuf = GlobalSecondaryBuffer.lpVtbl orelse return;
+    const hResult2 = dsBuf.Lock(GlobalSecondaryBuffer, ByteToLock, BytesToWrite, 
+                                &Region1, &Region1Size, 
+                                &Region2, &Region2Size, 0);
+    if (hResult2 == 0)
+    {
+        //w32f.OutputDebugStringA(c"We are writing to the sound buffer\n");
+        var SampleOut = @ptrCast([*]i16, @alignCast(2, Region1));
+        var SampleIndex: u32 = 0;
+        const Region1SampleCount = Region1Size / BytesPerSample;
+        while (SampleIndex < Region1SampleCount)
+        {
+            const SineValue: f32 = math.sin(tSine.*);
+            const SampleValue = @floatToInt(i16, (SineValue * @intToFloat(f32, ToneVolume)));
+            SampleOut.* = SampleValue;
+            SampleOut += 1;
+            SampleOut.* = SampleValue;
+            SampleOut += 1;
+            SampleIndex += 1;
+            tSine.* += 2.0 * math.pi * 1.0 / @intToFloat(f32, WavePeriod);
+            RunningSampleIndex.* +%= 1;
+        }
+        SampleIndex = 0;
+        SampleOut = @ptrCast([*]i16, @alignCast(2, Region2));
+        const Region2SampleCount = Region2Size / BytesPerSample;
+        while (SampleIndex < Region2SampleCount)
+        { 
+            const SineValue: f32 = math.sin(tSine.*);
+            const SampleValue = @floatToInt(i16, (SineValue * @intToFloat(f32, ToneVolume)));
+            SampleOut.* = SampleValue;
+            SampleOut += 1;
+            SampleOut.* = SampleValue;
+            SampleOut += 1;
+            SampleIndex += 1;
+            tSine.* += 2.0 * math.pi * 1.0 / @intToFloat(f32, WavePeriod);
+            RunningSampleIndex.* +%= 1;
+        }
+        const hResult3 = dsBuf.Unlock(GlobalSecondaryBuffer, Region1, Region1Size, Region2, Region2Size);
+        if (hResult3 != 0)
+        {
+            w32f.OutputDebugStringA(c"Couldn't unlock buffer?\n");
+        }
+    }
+    else
+    {
+        // w32f.OutputDebugStringA(c"Couldn't lock buffer\n");
+        // couldn't lock buffer?
+    }
+}
+
 pub export fn WinMain(Instance: HINSTANCE, 
                       PrevInstance: HINSTANCE, 
                       CommandLine: LPSTR, 
@@ -527,13 +587,19 @@ pub export fn WinMain(Instance: HINSTANCE,
 
             // sound
             const SamplesPerSecond = 48000;
+            const ToneVolume = 3000;
             const BytesPerSample = @sizeOf(i16) * 2;
-            const SecondaryBufferSize = SamplesPerSecond * BytesPerSample * 2;
-            const ToneVolume: i16 = 3000;
-            var ToneHz: u32 = 100;
+            const SecondaryBufferSize = SamplesPerSecond * BytesPerSample;
+            var ToneHz: u32 = 256;
+            var WavePeriod = SamplesPerSecond / ToneHz;
             var RunningSampleIndex: u32 = 0;
+            var tSine: f32 = 0.0;
+            var LatencySampleCount: u32 = SamplesPerSecond / 15;
 
             Win32InitDSound(Window, SecondaryBufferSize, SamplesPerSecond);
+            Win32FillSoundBuffer(0,          LatencySampleCount * BytesPerSample,
+                                 ToneVolume, BytesPerSample, 
+                                 WavePeriod, &RunningSampleIndex, &tSine);
             if (GlobalSecondaryBuffer.lpVtbl) |gsb|
             {
                 const ignored = gsb.Play(GlobalSecondaryBuffer, 0, 0, DSBPLAY_LOOPING);
@@ -541,9 +607,6 @@ pub export fn WinMain(Instance: HINSTANCE,
 
             while (GlobalRunning) 
             {
-                const SquareWavePeriod: u32 = SamplesPerSecond / (ToneHz + 1);
-                const HalfSquareWavePeriod: u32 = SquareWavePeriod / 2;
-
                 // Process OS messages
                 var Message: MSG = undefined;
                 var MessageResult: BOOL = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
@@ -588,27 +651,29 @@ pub export fn WinMain(Instance: HINSTANCE,
                         const XButton       = (Pad.wButtons & XINPUT_GAMEPAD_X) != 0;
                         const YButton       = (Pad.wButtons & XINPUT_GAMEPAD_Y) != 0;
 
-                        const StickX = @intCast(i32, Pad.sThumbLX >> 10);
+                        const StickX = @intCast(i32, Pad.sThumbLX);
                         const AbsStickX = if(StickX > 0) @intCast(u32, StickX) else @intCast(u32, -StickX);
-                        ToneHz = AbsStickX * 10;
-                        const StickY = @intCast(i32, Pad.sThumbLY >> 10);
-                        const AbsStickY = if(StickY > 0) @intCast(u32, StickY) else @intCast(u32, -StickY);
                         if(StickX > 0)
                         {
-                            XOffset = XOffset +% AbsStickX;
+                            XOffset +%= AbsStickX >> 12;
                         }
                         else
                         {
-                            XOffset = XOffset -% AbsStickX;
+                            XOffset -%= AbsStickX >> 12;
                         }
+
+                        const StickY = @intCast(i32, Pad.sThumbLY);
+                        const AbsStickY = if(StickY > 0) @intCast(u32, StickY) else @intCast(u32, -StickY);
                         if(StickY > 0)
                         {
-                            XOffset = XOffset +% AbsStickY;
+                            XOffset +%= AbsStickY >> 12;
                         }
                         else
                         {
-                            XOffset = XOffset -% AbsStickY;
+                            XOffset -%= AbsStickY >> 12;
                         }
+                        const NormalizedStickX: f32 = @intToFloat(f32, AbsStickX) / 30000.0;
+                        ToneHz = 512 + @floatToInt(u32, NormalizedStickX * 256.0);
                     }
                     else
                     {
@@ -626,71 +691,21 @@ pub export fn WinMain(Instance: HINSTANCE,
                     if (hResult1 == 0)
                     {
                         const ByteToLock = (RunningSampleIndex * BytesPerSample) % SecondaryBufferSize;
-                        var BytesToWrite: DWORD = 0;
-                        if (ByteToLock > PlayCursor)
+                        const TargetCursor = (PlayCursor + (LatencySampleCount * BytesPerSample)) % SecondaryBufferSize;
+                        var BytesToWrite: DWORD = undefined;
+                        if (ByteToLock > TargetCursor)
                         {
                             BytesToWrite = SecondaryBufferSize - ByteToLock;
-                            BytesToWrite += PlayCursor;
+                            BytesToWrite += TargetCursor;
                         }
                         else
                         {
-                            BytesToWrite = PlayCursor - ByteToLock;
+                            BytesToWrite = TargetCursor - ByteToLock;
                         }
-                        
-                        var Region1: ?*c_void = null;
-                        var Region1Size: DWORD = 0;
-                        var Region2: ?*c_void = null;
-                        var Region2Size: DWORD = 0;
-
-
-                        const hResult2 = dsBuf.Lock(GlobalSecondaryBuffer, ByteToLock, BytesToWrite, 
-                                                    &Region1, &Region1Size, 
-                                                    &Region2, &Region2Size, 0);
-                        if (hResult2 == 0)
-                        {
-                            //w32f.OutputDebugStringA(c"We are writing to the sound buffer\n");
-                            var SampleOut = @ptrCast([*]i16, @alignCast(2, Region1));
-                            var SampleIndex: u32 = 0;
-                            const Region1SampleCount = Region1Size / BytesPerSample;
-                            while (SampleIndex < Region1SampleCount)
-                            {
-                                const SampleValue = if ((RunningSampleIndex / HalfSquareWavePeriod) % 2 == 1) ToneVolume else -ToneVolume;
-                                SampleOut.* = SampleValue;
-                                SampleOut += 1;
-                                SampleOut.* = SampleValue;
-                                SampleOut += 1;
-                                SampleIndex += 1;
-                                RunningSampleIndex = RunningSampleIndex +% 1;
-                            }
-                            SampleIndex = 0;
-                            SampleOut = @ptrCast([*]i16, @alignCast(2, Region2));
-                            const Region2SampleCount = Region2Size / BytesPerSample;
-                            while (SampleIndex < Region2SampleCount)
-                            { 
-                                const SampleValue = if ((RunningSampleIndex / HalfSquareWavePeriod) % 2 == 1) ToneVolume else -ToneVolume;
-                                SampleOut.* = SampleValue;
-                                SampleOut += 1;
-                                SampleOut.* = SampleValue;
-                                SampleOut += 1;
-                                SampleIndex += 1;
-                                RunningSampleIndex = RunningSampleIndex +% 1;
-                            }
-                            const hResult3 = dsBuf.Unlock(GlobalSecondaryBuffer, Region1, Region1Size, Region2, Region2Size);
-                            if (hResult3 != 0)
-                            {
-                                w32f.OutputDebugStringA(c"Couldn't unlock buffer?\n");
-                            }
-                        }
-                        else
-                        {
-                            // w32f.OutputDebugStringA(c"Couldn't lock buffer\n");
-                            // couldn't lock buffer?
-                        }
-                    }
-                    else
-                    {
-                        w32f.OutputDebugStringA(c"Couldn't get cursor\n");
-                        // couldn't ask for cursor?
+                        WavePeriod = SamplesPerSecond / ToneHz;
+                        Win32FillSoundBuffer(ByteToLock,    BytesToWrite,
+                                             ToneVolume,    BytesPerSample, 
+                                             WavePeriod,    &RunningSampleIndex, &tSine);
                     }
                 }
 
@@ -701,7 +716,6 @@ pub export fn WinMain(Instance: HINSTANCE,
                                            DeviceContext, 
                                            Dimension.Width,
                                            Dimension.Height);
-                
             }
         } 
         else 
