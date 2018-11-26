@@ -1,2 +1,4 @@
 win32 library from http://zig.tgschultz.com/ 
 (supposedly public domain)
+
+a few things were modified by me

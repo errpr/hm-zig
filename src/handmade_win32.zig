@@ -310,7 +310,7 @@ fn Win32InitDSound(Window: HWND, BufferSize: DWORD, SamplesPerSecond: DWORD) voi
 fn Win32GetWindowDimension(Window: HWND) win32_window_dimension
 {
     var ClientRect: RECT = undefined;
-    const ignored = w32f.GetClientRect(Window, &ClientRect);
+    _ = w32f.GetClientRect(Window, &ClientRect);
     return win32_window_dimension {
         .Width = ClientRect.right - ClientRect.left,
         .Height = ClientRect.bottom - ClientRect.top,
@@ -470,7 +470,7 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
                                        Dimension.Height);
 
             // Releases the DC as well.
-            const ignored2 = w32f.EndPaint(Window, &Paint);
+            _ = w32f.EndPaint(Window, &Paint);
         },
         else => {
             Result = w32f.DefWindowProcA(Window, Message, WParam, LParam);
@@ -555,6 +555,11 @@ pub export fn WinMain(Instance: HINSTANCE,
 
     Win32ResizeDIBSection(&GlobalBackBuffer, 1280, 720);
 
+    var PerfCountFrequencyResult: LARGE_INTEGER = undefined;
+    _ = w32f.QueryPerformanceFrequency(&PerfCountFrequencyResult); 
+    const PerfCountFrequency: i64 = PerfCountFrequencyResult.QuadPart;
+    const PerfCountFrequencyFloat = @intToFloat(f32, PerfCountFrequency);
+
     const atom = w32f.RegisterClassA(&WindowClass);
     if (atom != 0) 
     {
@@ -573,11 +578,11 @@ pub export fn WinMain(Instance: HINSTANCE,
                 Instance,
                 null
             );
-        defer { const ignored = w32f.DestroyWindow(Window); }
+        defer { _ = w32f.DestroyWindow(Window); }
         if (Window != null) 
         {
             const DeviceContext = w32f.GetDC(Window);
-            defer { const ignored = w32f.ReleaseDC(Window, DeviceContext); }
+            defer { _ = w32f.ReleaseDC(Window, DeviceContext); }
 
             GlobalRunning = true;
 
@@ -597,16 +602,26 @@ pub export fn WinMain(Instance: HINSTANCE,
             var LatencySampleCount: u32 = SamplesPerSecond / 15;
 
             Win32InitDSound(Window, SecondaryBufferSize, SamplesPerSecond);
-            Win32FillSoundBuffer(0,          LatencySampleCount * BytesPerSample,
-                                 ToneVolume, BytesPerSample, 
-                                 WavePeriod, &RunningSampleIndex, &tSine);
+            Win32FillSoundBuffer(0,
+                                 LatencySampleCount * BytesPerSample,
+                                 ToneVolume, 
+                                 BytesPerSample,
+                                 WavePeriod,
+                                 &RunningSampleIndex,
+                                 &tSine);
             if (GlobalSecondaryBuffer.lpVtbl) |gsb|
             {
-                const ignored = gsb.Play(GlobalSecondaryBuffer, 0, 0, DSBPLAY_LOOPING);
+                _ = gsb.Play(GlobalSecondaryBuffer, 0, 0, DSBPLAY_LOOPING);
             }
+
+            var LastCounter: LARGE_INTEGER = undefined;
+            _ = w32f.QueryPerformanceCounter(&LastCounter);
+            // not sure how to get rdtsc working
+            //var LastCycleCount = __rdtsc();
 
             while (GlobalRunning) 
             {
+
                 // Process OS messages
                 var Message: MSG = undefined;
                 var MessageResult: BOOL = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
@@ -620,8 +635,8 @@ pub export fn WinMain(Instance: HINSTANCE,
                     } 
                     else
                     {
-                        const ignored1 = w32f.TranslateMessage(&Message);
-                        const ignored2 = w32f.DispatchMessageW(&Message);
+                        _ = w32f.TranslateMessage(&Message);
+                        _ = w32f.DispatchMessageW(&Message);
                         MessageResult = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
                     }
                 }
@@ -716,6 +731,18 @@ pub export fn WinMain(Instance: HINSTANCE,
                                            DeviceContext, 
                                            Dimension.Width,
                                            Dimension.Height);
+                
+                // Performance Timing
+                var EndCounter: LARGE_INTEGER = undefined;
+                _ = w32f.QueryPerformanceCounter(&EndCounter);
+                const CounterElapsed = @intToFloat(f32, EndCounter.QuadPart - LastCounter.QuadPart);
+                const MSPerFrame = (1000 * CounterElapsed) / PerfCountFrequencyFloat;
+                const FPS = PerfCountFrequencyFloat / CounterElapsed;
+                var Buffer: [256]u8 = undefined;
+                _ = w32f.wsprintfA(&Buffer, c"Milliseconds/frame: %d | %dFPS\n", @floatToInt(i32, MSPerFrame), @floatToInt(i32, FPS));
+                // _ = StringCbPrintfA(&Buffer, @sizeOf(u8) * 256, c"Milliseconds/frame: %f | %fFPS\n", MSPerFrame, FPS);
+                w32f.OutputDebugStringA(&Buffer);
+                LastCounter = EndCounter;
             }
         } 
         else 
