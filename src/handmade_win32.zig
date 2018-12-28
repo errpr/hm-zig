@@ -1,8 +1,27 @@
+// TODO
+//
+// Saved game locations
+// Getting a handle to our own executable failed
+// Asset loading path
+// Threading (launch a thread)
+// Raw input (support for multiple keyboards)
+// Sleep/timeBeginPeriod
+// ClipCursor() (for multimonitor support)
+// Fullscreen support
+// WM_SETCURSOR (control cursor visibility)
+// QueryCancelAutoplay
+// WM_ACTIVATEAPP
+// Blit speed improvement
+// Hardware acceleration (OpenGL or D3D or BOTH)
+// GetKeyboardLayout (for i18n)
+
+use @import("handmade_shared_types.zig");
 const std = @import("std");
 const math = @import("std").math;
 use @import("lib/win32/win32_types.zig");
 const w32f = @import("lib/win32/win32_functions.zig");
 const w32c = @import("lib/win32/win32_constants.zig");
+const handmade_main = @import("handmade.zig");
 
 const win32_offscreen_buffer = struct 
 {
@@ -538,6 +557,12 @@ fn Win32FillSoundBuffer(ByteToLock: DWORD,  BytesToWrite: DWORD,
     }
 }
 
+pub fn PlatformLoadFile(str: []const u8) void
+{
+    var i: i32 = 1;
+    i +%= 1;
+}
+
 pub export fn WinMain(Instance: HINSTANCE, 
                       PrevInstance: HINSTANCE, 
                       CommandLine: LPSTR, 
@@ -681,11 +706,11 @@ pub export fn WinMain(Instance: HINSTANCE,
                         const AbsStickY = if(StickY > 0) @intCast(u32, StickY) else @intCast(u32, -StickY);
                         if(StickY > 0)
                         {
-                            XOffset +%= AbsStickY >> 12;
+                            YOffset +%= AbsStickY >> 12;
                         }
                         else
                         {
-                            XOffset -%= AbsStickY >> 12;
+                            YOffset -%= AbsStickY >> 12;
                         }
                         const NormalizedStickX: f32 = @intToFloat(f32, AbsStickX) / 30000.0;
                         ToneHz = 512 + @floatToInt(u32, NormalizedStickX * 256.0);
@@ -725,7 +750,14 @@ pub export fn WinMain(Instance: HINSTANCE,
                 }
 
                 // Render
-                RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
+                var Buffer: game_offscreen_buffer = undefined;
+                Buffer.Memory = GlobalBackBuffer.Memory;
+                Buffer.Width = GlobalBackBuffer.Width;
+                Buffer.Height = GlobalBackBuffer.Height;
+                Buffer.Pitch = GlobalBackBuffer.Pitch;
+
+                handmade_main.UpdateAndRender(&Buffer, XOffset, YOffset);
+
                 const Dimension = Win32GetWindowDimension(Window);
                 Win32DisplayBufferInWindow(GlobalBackBuffer, 
                                            DeviceContext, 
@@ -738,10 +770,10 @@ pub export fn WinMain(Instance: HINSTANCE,
                 const CounterElapsed = @intToFloat(f32, EndCounter.QuadPart - LastCounter.QuadPart);
                 const MSPerFrame = (1000 * CounterElapsed) / PerfCountFrequencyFloat;
                 const FPS = PerfCountFrequencyFloat / CounterElapsed;
-                var Buffer: [256]u8 = undefined;
-                _ = w32f.wsprintfA(&Buffer, c"Milliseconds/frame: %d | %dFPS\n", @floatToInt(i32, MSPerFrame), @floatToInt(i32, FPS));
-                // _ = StringCbPrintfA(&Buffer, @sizeOf(u8) * 256, c"Milliseconds/frame: %f | %fFPS\n", MSPerFrame, FPS);
-                w32f.OutputDebugStringA(&Buffer);
+                var StringBuffer: [256]u8 = undefined;
+                _ = w32f.wsprintfA(&StringBuffer, c"Milliseconds/frame: %d | %dFPS\n", @floatToInt(i32, MSPerFrame), @floatToInt(i32, FPS));
+                // _ = StringCbPrintfA(&StringBuffer, @sizeOf(u8) * 256, c"Milliseconds/frame: %f | %fFPS\n", MSPerFrame, FPS);
+                w32f.OutputDebugStringA(&StringBuffer);
                 LastCounter = EndCounter;
             }
         } 
