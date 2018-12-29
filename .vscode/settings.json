@@ -1,5 +1,6 @@
 {
   "terminal.integrated.shellArgs.windows": [
     "/k shellconfig.bat"
-  ]
+  ],
+  "files.eol": "\n"
 }

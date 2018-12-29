@@ -498,35 +498,69 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
     return Result;
 }
 
-//NOTE Casey uses a struct for most of these values, I've deviated and just pass everything as individual parameters.
-fn Win32FillSoundBuffer(ByteToLock: DWORD,  BytesToWrite: DWORD,
-                        ToneVolume: u32,    BytesPerSample: u32, 
-                        WavePeriod: u32,    RunningSampleIndex: *u32, tSine: *f32) void
+fn Win32ClearSoundBuffer(SecondaryBufferSize: u32) void
 {
     var Region1: ?*c_void = null;
     var Region1Size: DWORD = 0;
     var Region2: ?*c_void = null;
     var Region2Size: DWORD = 0;
     const dsBuf = GlobalSecondaryBuffer.lpVtbl orelse return;
-    const hResult2 = dsBuf.Lock(GlobalSecondaryBuffer, ByteToLock, BytesToWrite, 
+    const hResult = dsBuf.Lock(GlobalSecondaryBuffer, 0, SecondaryBufferSize, 
                                 &Region1, &Region1Size, 
                                 &Region2, &Region2Size, 0);
-    if (hResult2 == 0)
+    if (hResult == 0)
+    {
+        var ByteIndex: u32 = 0;
+        var DestByte = @ptrCast([*]u8, Region1);
+        while (ByteIndex < Region1Size)
+        {
+            DestByte.* = 0;
+            DestByte += 1;
+            ByteIndex +%= 1;
+        }
+
+        DestByte = @ptrCast([*]u8, Region2);
+        ByteIndex = 0;
+        while (ByteIndex < Region2Size)
+        {
+            DestByte.* = 0;
+            DestByte += 1;
+            ByteIndex +%= 1;
+        }
+        _ = dsBuf.Unlock(GlobalSecondaryBuffer, Region1, Region1Size, Region2, Region2Size);
+    }
+}
+//NOTE Casey uses a struct for most of these values, I've deviated and just pass everything as individual parameters.
+fn Win32FillSoundBuffer(ByteToLock: DWORD, BytesPerSample: DWORD, 
+                        BytesToWrite: DWORD, GameSound: *game_output_sound_buffer,
+                        RunningSampleIndex: *u32) void
+{
+    var Region1: ?*c_void = null;
+    var Region1Size: DWORD = 0;
+    var Region2: ?*c_void = null;
+    var Region2Size: DWORD = 0;
+    const dsBuf = GlobalSecondaryBuffer.lpVtbl orelse return;
+    const hResult = dsBuf.Lock(GlobalSecondaryBuffer, ByteToLock, BytesToWrite, 
+                                &Region1, &Region1Size, 
+                                &Region2, &Region2Size, 0);
+    if (hResult == 0)
     {
         //w32f.OutputDebugStringA(c"We are writing to the sound buffer\n");
         var SampleOut = @ptrCast([*]i16, @alignCast(2, Region1));
         var SampleIndex: u32 = 0;
+        var GameIndex: u32 = 0;
         const Region1SampleCount = Region1Size / BytesPerSample;
         while (SampleIndex < Region1SampleCount)
         {
-            const SineValue: f32 = math.sin(tSine.*);
-            const SampleValue = @floatToInt(i16, (SineValue * @intToFloat(f32, ToneVolume)));
-            SampleOut.* = SampleValue;
+            SampleOut.* = GameSound.Samples[GameIndex];
             SampleOut += 1;
-            SampleOut.* = SampleValue;
+            GameIndex += 1;
+            if (GameIndex >= GameSound.SampleCount * 2) { GameIndex = 0; }
+            SampleOut.* = GameSound.Samples[GameIndex];
             SampleOut += 1;
+            GameIndex += 1;
+            if (GameIndex >= GameSound.SampleCount * 2) { GameIndex = 0; }
             SampleIndex += 1;
-            tSine.* += 2.0 * math.pi * 1.0 / @intToFloat(f32, WavePeriod);
             RunningSampleIndex.* +%= 1;
         }
         SampleIndex = 0;
@@ -534,21 +568,18 @@ fn Win32FillSoundBuffer(ByteToLock: DWORD,  BytesToWrite: DWORD,
         const Region2SampleCount = Region2Size / BytesPerSample;
         while (SampleIndex < Region2SampleCount)
         { 
-            const SineValue: f32 = math.sin(tSine.*);
-            const SampleValue = @floatToInt(i16, (SineValue * @intToFloat(f32, ToneVolume)));
-            SampleOut.* = SampleValue;
+            SampleOut.* = GameSound.Samples[GameIndex];
             SampleOut += 1;
-            SampleOut.* = SampleValue;
+            GameIndex += 1;
+            if (GameIndex >= GameSound.SampleCount * 2) { GameIndex = 0; }
+            SampleOut.* = GameSound.Samples[GameIndex];
             SampleOut += 1;
+            GameIndex += 1;
+            if (GameIndex >= GameSound.SampleCount * 2) { GameIndex = 0; }
             SampleIndex += 1;
-            tSine.* += 2.0 * math.pi * 1.0 / @intToFloat(f32, WavePeriod);
             RunningSampleIndex.* +%= 1;
         }
-        const hResult3 = dsBuf.Unlock(GlobalSecondaryBuffer, Region1, Region1Size, Region2, Region2Size);
-        if (hResult3 != 0)
-        {
-            w32f.OutputDebugStringA(c"Couldn't unlock buffer?\n");
-        }
+        _ = dsBuf.Unlock(GlobalSecondaryBuffer, Region1, Region1Size, Region2, Region2Size);
     }
     else
     {
@@ -626,14 +657,11 @@ pub export fn WinMain(Instance: HINSTANCE,
             var tSine: f32 = 0.0;
             var LatencySampleCount: u32 = SamplesPerSecond / 15;
 
+            var GameSampleMem = w32f.VirtualAlloc(null, SecondaryBufferSize, w32c.MEM_RESERVE|w32c.MEM_COMMIT, w32c.PAGE_READWRITE);
+
             Win32InitDSound(Window, SecondaryBufferSize, SamplesPerSecond);
-            Win32FillSoundBuffer(0,
-                                 LatencySampleCount * BytesPerSample,
-                                 ToneVolume, 
-                                 BytesPerSample,
-                                 WavePeriod,
-                                 &RunningSampleIndex,
-                                 &tSine);
+            Win32ClearSoundBuffer(SecondaryBufferSize);
+
             if (GlobalSecondaryBuffer.lpVtbl) |gsb|
             {
                 _ = gsb.Play(GlobalSecondaryBuffer, 0, 0, DSBPLAY_LOOPING);
@@ -721,18 +749,21 @@ pub export fn WinMain(Instance: HINSTANCE,
                     }
                     ControllerIndex += 1;
                 }
-                
-                // Sound
+
+                var PlayCursor: DWORD = 0;
+                var WriteCursor: DWORD = 0;
+                var ByteToLock: DWORD = undefined;
+                var TargetCursor: DWORD = undefined;
+                var BytesToWrite: DWORD = undefined;
+                var SoundIsValid = false;
                 if (GlobalSecondaryBuffer.lpVtbl) |dsBuf|
                 {
-                    var PlayCursor: DWORD = 0;
-                    var WriteCursor: DWORD = 0;
                     var hResult1 = dsBuf.GetCurrentPosition(GlobalSecondaryBuffer, &WriteCursor, &PlayCursor);
                     if (hResult1 == 0)
                     {
-                        const ByteToLock = (RunningSampleIndex * BytesPerSample) % SecondaryBufferSize;
-                        const TargetCursor = (PlayCursor + (LatencySampleCount * BytesPerSample)) % SecondaryBufferSize;
-                        var BytesToWrite: DWORD = undefined;
+                        ByteToLock = (RunningSampleIndex * BytesPerSample) % SecondaryBufferSize;
+                        TargetCursor = (PlayCursor + (LatencySampleCount * BytesPerSample)) % SecondaryBufferSize;
+
                         if (ByteToLock > TargetCursor)
                         {
                             BytesToWrite = SecondaryBufferSize - ByteToLock;
@@ -743,20 +774,29 @@ pub export fn WinMain(Instance: HINSTANCE,
                             BytesToWrite = TargetCursor - ByteToLock;
                         }
                         WavePeriod = SamplesPerSecond / ToneHz;
-                        Win32FillSoundBuffer(ByteToLock,    BytesToWrite,
-                                             ToneVolume,    BytesPerSample, 
-                                             WavePeriod,    &RunningSampleIndex, &tSine);
+                        SoundIsValid = true;
                     }
                 }
 
-                // Render
-                var Buffer: game_offscreen_buffer = undefined;
-                Buffer.Memory = GlobalBackBuffer.Memory;
-                Buffer.Width = GlobalBackBuffer.Width;
-                Buffer.Height = GlobalBackBuffer.Height;
-                Buffer.Pitch = GlobalBackBuffer.Pitch;
+                var SoundBuffer: game_output_sound_buffer = undefined;
+                SoundBuffer.SamplesPerSecond = SamplesPerSecond;
+                SoundBuffer.SampleCount = BytesToWrite / BytesPerSample;
+                SoundBuffer.Samples = @ptrCast([*]i16, @alignCast(2, GameSampleMem));
 
-                handmade_main.UpdateAndRender(&Buffer, XOffset, YOffset);
+                var BitmapBuffer: game_offscreen_buffer = undefined;
+                BitmapBuffer.Memory = GlobalBackBuffer.Memory;
+                BitmapBuffer.Width = GlobalBackBuffer.Width;
+                BitmapBuffer.Height = GlobalBackBuffer.Height;
+                BitmapBuffer.Pitch = GlobalBackBuffer.Pitch;
+
+                handmade_main.UpdateAndRender(&BitmapBuffer, XOffset, YOffset, &SoundBuffer, &tSine, ToneHz);
+                
+                if (SoundIsValid)
+                {
+                    
+                    Win32FillSoundBuffer(ByteToLock, BytesPerSample, BytesToWrite, &SoundBuffer, &RunningSampleIndex);
+                    
+                }
 
                 const Dimension = Win32GetWindowDimension(Window);
                 Win32DisplayBufferInWindow(GlobalBackBuffer, 
