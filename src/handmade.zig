@@ -17,27 +17,86 @@ const math = @import("std").math;
 //     }
 // };
 
-pub fn UpdateAndRender(BitmapBuffer: *game_offscreen_buffer, XOffset: u32, YOffset: u32, SoundBuffer: *game_output_sound_buffer, tSine: *f32, ToneHz: u32) void 
+
+pub fn UpdateAndRender(BitmapBuffer: *game_offscreen_buffer, 
+                       SoundBuffer: *game_output_sound_buffer,
+                       Input: *game_input,
+                       GameState: *game_state) void 
 {
-    // need to account for variable delay
-    OutputSound(SoundBuffer, tSine, ToneHz);
-    RenderWeirdGradient(BitmapBuffer, XOffset, YOffset);
+    // input processing
+    var Input0 = Input.Controllers[0];
+    
+    if (Input0.IsAnalog)
+    {
+        const StickX = Input0.EndX;
+        if(StickX > 0)
+        {
+            GameState.XOffset +%= @floatToInt(u32, StickX * 10);
+            const ToneValue = 512 + @floatToInt(i32, StickX * 256.0);
+            if (ToneValue < 1)
+            {
+                GameState.ToneHz = 1;
+            }
+            else
+            {
+                GameState.ToneHz = @intCast(u32, ToneValue);
+            }
+        }
+        else if(StickX < 0)
+        {
+            GameState.XOffset -%= @floatToInt(u32, -StickX * 10);
+            const ToneValue = 512 - @floatToInt(i32, -StickX * 256.0);
+            if (ToneValue < 1)
+            {
+                GameState.ToneHz = 1;
+            }
+            else
+            {
+                GameState.ToneHz = @intCast(u32, ToneValue);
+            }
+        }
+        else
+        {
+            GameState.ToneHz = 512;
+        }
+
+        const StickY = Input0.EndY;
+        if(StickY > 0)
+        {
+            GameState.YOffset +%= @floatToInt(u32, StickY * 10.0);
+        }
+        else
+        {
+            GameState.YOffset -%= @floatToInt(u32, -StickY * 10.0);
+        }
+    }
+    else
+    {
+        // digital only or maybe keyboard
+    }
+    
+
+    // sound
+    OutputSound(SoundBuffer, GameState.ToneHz);
+    
+    // graphics
+    RenderWeirdGradient(BitmapBuffer, GameState.XOffset, GameState.YOffset);
 }
 
-pub fn OutputSound(SoundBuffer: *game_output_sound_buffer, tSine: *f32, ToneHz: u32) void
+pub fn OutputSound(SoundBuffer: *game_output_sound_buffer, ToneHz: u32) void
 {
     var SampleIndex: u32 = 0;
-    const ToneVolume: i16 = 3000;
-    const WavePeriod = @divFloor(SoundBuffer.SamplesPerSecond, ToneHz);
+    const ToneVolume: f32 = 3000;
+    const WavePeriod = @intToFloat(f32, SoundBuffer.SamplesPerSecond) / @intToFloat(f32, ToneHz);
     while (SampleIndex < SoundBuffer.SampleCount * 2)
     {
-        const SineValue: f32 = math.sin(tSine.*);
-        const SampleValue = @floatToInt(i16, (SineValue * @intToFloat(f32, ToneVolume)));
+        const SineValue: f32 = math.sin(SoundBuffer.tSine);
+        const SampleValue = @floatToInt(i16, SineValue * ToneVolume);
         SoundBuffer.Samples[SampleIndex] = SampleValue;
         SampleIndex += 1;
         SoundBuffer.Samples[SampleIndex] = SampleValue;
         SampleIndex += 1;
-        tSine.* += 2.0 * math.pi * 1.0 / @intToFloat(f32, WavePeriod);
+        SoundBuffer.tSine += 2.0 * math.pi * (1.0 / WavePeriod);
     }
 }
 
@@ -52,7 +111,6 @@ fn RenderWeirdGradient(Buffer: *game_offscreen_buffer, XOffset: u32, YOffset: u3
         
         while (X < Buffer.Width)
         {
-            //Blue
             var Blue = @intCast(u32, @truncate(u8, @intCast(u32, X) +% XOffset));
             var Green = @intCast(u32, @truncate(u8, @intCast(u32, Y) +% YOffset));
 

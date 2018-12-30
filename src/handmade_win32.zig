@@ -594,6 +594,19 @@ pub fn PlatformLoadFile(str: []const u8) void
     i +%= 1;
 }
 
+fn Win32ProcessXInputDigitalButton(OldState: game_button_state, EndedDown: bool) game_button_state
+{
+    var htc: u8 = 0;
+    if (EndedDown == OldState.EndedDown)
+    {
+        htc = 1;
+    }
+    return game_button_state {
+        .EndedDown = EndedDown,
+        .HalfTransitionCount = htc,
+    };
+}
+
 pub export fn WinMain(Instance: HINSTANCE, 
                       PrevInstance: HINSTANCE, 
                       CommandLine: LPSTR, 
@@ -642,22 +655,49 @@ pub export fn WinMain(Instance: HINSTANCE,
 
             GlobalRunning = true;
 
-            // graphics
-            var XOffset: u32 = 0;
-            var YOffset: u32 = 0;
+            var GameState: game_state = undefined;
+            var InputState: game_input = undefined;
+            {
+                var ControllerIndex: u32 = 0;
+                while (ControllerIndex < InputState.Controllers.len)
+                {
+                    InputState.Controllers[ControllerIndex] = game_controller_input {
+                        .IsAnalog = true,
+                        .StartX = 0,
+                        .StartY = 0,
+                        .MinX = 0,
+                        .MinY = 0,
+                        .MaxX = 0,
+                        .MaxY = 0,
+                        .EndX = 0,
+                        .EndY = 0,
+                        .Up = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .Down = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .Left = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .Right = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .LeftShoulder = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .RightShoulder = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .AButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .BButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .XButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .YButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                    };
+                    ControllerIndex +%= 1;
+                }
+            }
 
             // sound
             const SamplesPerSecond = 48000;
-            const ToneVolume = 3000;
             const BytesPerSample = @sizeOf(i16) * 2;
             const SecondaryBufferSize = SamplesPerSecond * BytesPerSample;
-            var ToneHz: u32 = 256;
-            var WavePeriod = SamplesPerSecond / ToneHz;
             var RunningSampleIndex: u32 = 0;
-            var tSine: f32 = 0.0;
             var LatencySampleCount: u32 = SamplesPerSecond / 15;
 
             var GameSampleMem = w32f.VirtualAlloc(null, SecondaryBufferSize, w32c.MEM_RESERVE|w32c.MEM_COMMIT, w32c.PAGE_READWRITE);
+            var SoundBuffer: game_output_sound_buffer = undefined;
+            SoundBuffer.SamplesPerSecond = SamplesPerSecond;
+            SoundBuffer.tSine = 0;
+            SoundBuffer.Samples = @ptrCast([*]i16, @alignCast(2, GameSampleMem));
 
             Win32InitDSound(Window, SecondaryBufferSize, SamplesPerSecond);
             Win32ClearSoundBuffer(SecondaryBufferSize);
@@ -719,29 +759,59 @@ pub export fn WinMain(Instance: HINSTANCE,
                         const XButton       = (Pad.wButtons & XINPUT_GAMEPAD_X) != 0;
                         const YButton       = (Pad.wButtons & XINPUT_GAMEPAD_Y) != 0;
 
-                        const StickX = @intCast(i32, Pad.sThumbLX);
-                        const AbsStickX = if(StickX > 0) @intCast(u32, StickX) else @intCast(u32, -StickX);
-                        if(StickX > 0)
+                        var StartX: f32 = 0;
+                        var StartY: f32 = 0;
+                        var MaxX: f32 = 0;
+                        var MaxY: f32 = 0;
+                        var MinX: f32 = 0;
+                        var MinY: f32 = 0;
+                        var EndX: f32 = 0;
+                        var EndY: f32 = 0;
+
+                        var StickX: f32 = 0;
+                        var StickY: f32 = 0;
+                        if (Pad.sThumbLX < 0)
                         {
-                            XOffset +%= AbsStickX >> 12;
+                            StickX = @intToFloat(f32, Pad.sThumbLX) / 32768.0;
                         }
                         else
                         {
-                            XOffset -%= AbsStickX >> 12;
+                            StickX = @intToFloat(f32, Pad.sThumbLX) / 32767.0;
                         }
 
-                        const StickY = @intCast(i32, Pad.sThumbLY);
-                        const AbsStickY = if(StickY > 0) @intCast(u32, StickY) else @intCast(u32, -StickY);
-                        if(StickY > 0)
+                        if (Pad.sThumbLY < 0)
                         {
-                            YOffset +%= AbsStickY >> 12;
+                            StickY = @intToFloat(f32, Pad.sThumbLY) / 32768.0;
                         }
                         else
                         {
-                            YOffset -%= AbsStickY >> 12;
+                            StickY = @intToFloat(f32, Pad.sThumbLY) / 32767.0;
                         }
-                        const NormalizedStickX: f32 = @intToFloat(f32, AbsStickX) / 30000.0;
-                        ToneHz = 512 + @floatToInt(u32, NormalizedStickX * 256.0);
+
+                        StartX = InputState.Controllers[ControllerIndex].EndX;
+                        StartY = InputState.Controllers[ControllerIndex].EndY;
+                        var NewState = game_controller_input {
+                            .IsAnalog = true,
+                            .StartX = StartX,
+                            .StartY = StartY,
+                            .MinX = StickX,
+                            .MinY = StickY,
+                            .MaxX = StickX,
+                            .MaxY = StickY,
+                            .EndX = StickX,
+                            .EndY = StickY,
+                            .Up = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].Up, Up),
+                            .Down = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].Down, Down),
+                            .Left = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].Left, Left),
+                            .Right = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].Right, Right),
+                            .LeftShoulder = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].LeftShoulder, LeftShoulder),
+                            .RightShoulder = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].RightShoulder, RightShoulder),
+                            .AButton = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].AButton, AButton),
+                            .BButton = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].BButton, BButton),
+                            .XButton = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].XButton, XButton),
+                            .YButton = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].YButton, YButton),
+                        };
+                        InputState.Controllers[ControllerIndex] = NewState;
                     }
                     else
                     {
@@ -773,15 +843,9 @@ pub export fn WinMain(Instance: HINSTANCE,
                         {
                             BytesToWrite = TargetCursor - ByteToLock;
                         }
-                        WavePeriod = SamplesPerSecond / ToneHz;
                         SoundIsValid = true;
                     }
                 }
-
-                var SoundBuffer: game_output_sound_buffer = undefined;
-                SoundBuffer.SamplesPerSecond = SamplesPerSecond;
-                SoundBuffer.SampleCount = BytesToWrite / BytesPerSample;
-                SoundBuffer.Samples = @ptrCast([*]i16, @alignCast(2, GameSampleMem));
 
                 var BitmapBuffer: game_offscreen_buffer = undefined;
                 BitmapBuffer.Memory = GlobalBackBuffer.Memory;
@@ -789,7 +853,9 @@ pub export fn WinMain(Instance: HINSTANCE,
                 BitmapBuffer.Height = GlobalBackBuffer.Height;
                 BitmapBuffer.Pitch = GlobalBackBuffer.Pitch;
 
-                handmade_main.UpdateAndRender(&BitmapBuffer, XOffset, YOffset, &SoundBuffer, &tSine, ToneHz);
+                SoundBuffer.SampleCount = BytesToWrite / BytesPerSample;
+
+                handmade_main.UpdateAndRender(&BitmapBuffer, &SoundBuffer, &InputState, &GameState);
                 
                 if (SoundIsValid)
                 {
