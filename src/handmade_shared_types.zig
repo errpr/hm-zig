@@ -14,11 +14,25 @@ pub const game_output_sound_buffer = struct
     tSine: f32,
 };
 
+pub const game_clocks = struct 
+{
+    SecondsElapsed: f32,
+};
+
 pub const game_state = struct
 {
     ToneHz: u32,
     XOffset: u32,
     YOffset: u32,
+};
+
+pub const game_memory = struct
+{
+    IsInitialized: bool,
+    PermanentStorageSize: u64,
+    PermanentStorage: [*]u8,
+    TransientStorageSize: u64,
+    TransientStorage: [*]u8,
 };
 
 pub const game_input = struct
@@ -31,7 +45,6 @@ pub const game_button_state = struct
     HalfTransitionCount: u8,
     EndedDown: bool,
 };
-
 
 pub const game_controller_input = struct
 {

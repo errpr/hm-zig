@@ -1,6 +1,7 @@
+const std = @import("std");
 use @import("handmade_shared_types.zig");
-
-const math = @import("std").math;
+const math = std.math;
+const assert = std.debug.assert;
 
 // pub const Game = struct 
 // {
@@ -21,8 +22,18 @@ const math = @import("std").math;
 pub fn UpdateAndRender(BitmapBuffer: *game_offscreen_buffer, 
                        SoundBuffer: *game_output_sound_buffer,
                        Input: *game_input,
-                       GameState: *game_state) void 
+                       Memory: *game_memory) void 
 {
+    assert(@sizeOf(game_state) <= Memory.PermanentStorageSize);
+    var GameState = @ptrCast(*game_state, @alignCast(4, Memory.PermanentStorage));
+    if (!Memory.IsInitialized)
+    {
+        GameState.ToneHz = 256;
+        GameState.XOffset = 0;
+        GameState.YOffset = 0;
+        Memory.IsInitialized = true;
+    }
+
     // input processing
     var Input0 = Input.Controllers[0];
     
@@ -83,7 +94,7 @@ pub fn UpdateAndRender(BitmapBuffer: *game_offscreen_buffer,
     RenderWeirdGradient(BitmapBuffer, GameState.XOffset, GameState.YOffset);
 }
 
-pub fn OutputSound(SoundBuffer: *game_output_sound_buffer, ToneHz: u32) void
+fn OutputSound(SoundBuffer: *game_output_sound_buffer, ToneHz: u32) void
 {
     var SampleIndex: u32 = 0;
     const ToneVolume: f32 = 3000;
@@ -96,7 +107,17 @@ pub fn OutputSound(SoundBuffer: *game_output_sound_buffer, ToneHz: u32) void
         SampleIndex += 1;
         SoundBuffer.Samples[SampleIndex] = SampleValue;
         SampleIndex += 1;
-        SoundBuffer.tSine += 2.0 * math.pi * (1.0 / WavePeriod);
+        
+        //SoundBuffer.tSine = @mod(SoundBuffer.tSine + (2.0 * math.pi * (1.0 / WavePeriod)), WavePeriod * 2);
+        // tSine loses precision too quickly, this reset fixes it but still causes a popping sound even at 0.00001
+        if(@rem(SoundBuffer.tSine, WavePeriod) < 0.00001)
+        {
+            SoundBuffer.tSine = 2.0 * math.pi * (1.0 / WavePeriod);
+        }
+        else
+        {
+            SoundBuffer.tSine += 2.0 * math.pi * (1.0 / WavePeriod);
+        }
     }
 }
 

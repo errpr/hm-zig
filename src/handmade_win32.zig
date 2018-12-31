@@ -17,7 +17,8 @@
 
 use @import("handmade_shared_types.zig");
 const std = @import("std");
-const math = @import("std").math;
+const math = std.math;
+const assert = std.debug.assert;
 use @import("lib/win32/win32_types.zig");
 const w32f = @import("lib/win32/win32_functions.zig");
 const w32c = @import("lib/win32/win32_constants.zig");
@@ -336,31 +337,6 @@ fn Win32GetWindowDimension(Window: HWND) win32_window_dimension
     };
 }
 
-fn RenderWeirdGradient(Buffer: *win32_offscreen_buffer, XOffset: u32, YOffset: u32) void
-{
-    var Row = @ptrCast([*]u8, Buffer.Memory);
-    var Y: i32 = 0;
-    while (Y < Buffer.Height) 
-    {
-        var X: i32 = 0;
-        var Pixel = @ptrCast([*]u32, @alignCast(4, Row));
-        
-        while (X < Buffer.Width)
-        {
-            //Blue
-            var Blue = @intCast(u32, @truncate(u8, @intCast(u32, X) +% XOffset));
-            var Green = @intCast(u32, @truncate(u8, @intCast(u32, Y) +% YOffset));
-
-            Pixel.* = Green << 8 | Blue;
-            Pixel += 1;
-
-            X += 1;
-        }
-        Row += Buffer.Pitch;
-        Y += 1;
-    }
-}
-
 fn Win32ResizeDIBSection(Buffer: *win32_offscreen_buffer, Width: c_int, Height: c_int) void 
 {
     if(Buffer.Memory != null) 
@@ -654,12 +630,22 @@ pub export fn WinMain(Instance: HINSTANCE,
             defer { _ = w32f.ReleaseDC(Window, DeviceContext); }
 
             GlobalRunning = true;
+            
+            var GameMemory: game_memory = undefined;
+            GameMemory.IsInitialized = false;
+            GameMemory.PermanentStorageSize = 64 * 1024 * 1024;
+            GameMemory.TransientStorageSize = 2 * 1024 * 1024 * 1024;
+            var TotalSize = GameMemory.PermanentStorageSize + GameMemory.TransientStorageSize;
+            var mem = w32f.VirtualAlloc(null, TotalSize, w32c.MEM_RESERVE|w32c.MEM_COMMIT, w32c.PAGE_READWRITE) orelse return 2;
+            GameMemory.PermanentStorage = @ptrCast([*]u8, mem);
+            GameMemory.TransientStorage = GameMemory.PermanentStorage + GameMemory.PermanentStorageSize;
+            
+            defer { _ = w32f.VirtualFree(GameMemory.PermanentStorage, TotalSize, w32c.MEM_RELEASE); }
 
-            var GameState: game_state = undefined;
             var InputState: game_input = undefined;
             {
                 var ControllerIndex: u32 = 0;
-                while (ControllerIndex < InputState.Controllers.len)
+                while (ControllerIndex < InputState.Controllers.len) : (ControllerIndex += 1)
                 {
                     InputState.Controllers[ControllerIndex] = game_controller_input {
                         .IsAnalog = true,
@@ -682,7 +668,6 @@ pub export fn WinMain(Instance: HINSTANCE,
                         .XButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
                         .YButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
                     };
-                    ControllerIndex +%= 1;
                 }
             }
 
@@ -855,7 +840,7 @@ pub export fn WinMain(Instance: HINSTANCE,
 
                 SoundBuffer.SampleCount = BytesToWrite / BytesPerSample;
 
-                handmade_main.UpdateAndRender(&BitmapBuffer, &SoundBuffer, &InputState, &GameState);
+                handmade_main.UpdateAndRender(&BitmapBuffer, &SoundBuffer, &InputState, &GameMemory);
                 
                 if (SoundIsValid)
                 {

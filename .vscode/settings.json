@@ -2,5 +2,12 @@
   "terminal.integrated.shellArgs.windows": [
     "/k shellconfig.bat"
   ],
-  "files.eol": "\n"
+  "files.eol": "\n",
+  "editor.accessibilitySupport": "off",
+  "editor.autoClosingBrackets": "beforeWhitespace",
+  "editor.autoClosingQuotes": "beforeWhitespace",
+  "editor.lineNumbers": "off",
+  "editor.formatOnPaste": true,
+  "editor.minimap.maxColumn": 80,
+  "zenMode.hideTabs": false
 }
