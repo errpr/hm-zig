@@ -3,23 +3,8 @@ use @import("handmade_shared_types.zig");
 const math = std.math;
 const assert = std.debug.assert;
 
-// pub const Game = struct 
-// {
-//     // functions provided to the game from the platform
-    
-//     PlatformLoadFile: fn ([]const u8) void,
-
-//     // functions provided to the platform from the game
-
-//     // should eventually take timing, controller input, bitmap buffer, sound buffer
-//     pub fn UpdateAndRender(self: Game, BitmapBuffer: *game_offscreen_buffer, XOffset: u32, YOffset: u32) void 
-//     {
-//         RenderWeirdGradient(BitmapBuffer, XOffset, YOffset);
-//     }
-// };
-
-
-pub fn UpdateAndRender(BitmapBuffer: *game_offscreen_buffer, 
+pub fn UpdateAndRender(Platform: *const platform_callbacks,
+                       BitmapBuffer: *game_offscreen_buffer, 
                        SoundBuffer: *game_output_sound_buffer,
                        Input: *game_input,
                        Memory: *game_memory) void 
@@ -28,6 +13,13 @@ pub fn UpdateAndRender(BitmapBuffer: *game_offscreen_buffer,
     var GameState = @ptrCast(*game_state, @alignCast(4, Memory.PermanentStorage));
     if (!Memory.IsInitialized)
     {
+        const Filename = c"test.txt";
+        var ReadResult = Platform.DEBUGReadEntireFile(Filename);
+        if (ReadResult.ContentsSize > 0)
+        {
+            _ = Platform.DEBUGWriteEntireFile(c"test.out", @sizeOf(game_state), @ptrCast([*]u8, GameState));
+            Platform.DEBUGFreeFileMemory(ReadResult.Contents);
+        }
         GameState.ToneHz = 256;
         GameState.XOffset = 0;
         GameState.YOffset = 0;

@@ -1,6 +1,8 @@
 use @import("win32_types.zig");
 use @import("win32_macros.zig");
 
+pub const INVALID_HANDLE_VALUE: isize = -1;
+
 pub const ABE_BOTTOM = 3;
 pub const ABE_LEFT = 0;
 pub const ABE_RIGHT = 2;

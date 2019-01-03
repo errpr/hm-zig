@@ -564,12 +564,6 @@ fn Win32FillSoundBuffer(ByteToLock: DWORD, BytesPerSample: DWORD,
     }
 }
 
-pub fn PlatformLoadFile(str: []const u8) void
-{
-    var i: i32 = 1;
-    i +%= 1;
-}
-
 fn Win32ProcessXInputDigitalButton(OldState: game_button_state, EndedDown: bool) game_button_state
 {
     var htc: u8 = 0;
@@ -582,6 +576,88 @@ fn Win32ProcessXInputDigitalButton(OldState: game_button_state, EndedDown: bool)
         .HalfTransitionCount = htc,
     };
 }
+
+fn DEBUGWin32FreeFileMemory(Memory: [*]u8) void
+{
+    _ = w32f.VirtualFree(Memory, 0, w32c.MEM_RELEASE);
+}
+
+fn DEBUGWin32ReadEntireFile(Filename: [*]const u8) debug_read_file_result
+{
+    var Result = debug_read_file_result {
+        .ContentsSize = 0,
+        .Contents = undefined,
+    };
+
+    const FileHandle = w32f.CreateFileA(Filename, 
+                                        @bitCast(c_ulong, w32c.GENERIC_READ), 
+                                        w32c.FILE_SHARE_READ, 
+                                        null, 
+                                        w32c.OPEN_EXISTING, 
+                                        0, 
+                                        null);
+
+    if (@bitCast(isize, @ptrToInt(FileHandle)) != w32c.INVALID_HANDLE_VALUE)
+    {
+        var FileSize: LARGE_INTEGER = undefined;
+        var FileMemory: ?*c_void = null;
+        const success = w32f.GetFileSizeEx(FileHandle, &FileSize);
+
+        if(success != 0)
+        {
+            assert(FileSize.QuadPart < 0xFFFFFFFF);
+            var FileSize32 = @truncate(c_ulong, @intCast(u64, FileSize.QuadPart));
+            FileMemory = w32f.VirtualAlloc(null, FileSize32, w32c.MEM_RESERVE|w32c.MEM_COMMIT, w32c.PAGE_READWRITE);
+            if (FileMemory) |FileMem| {
+                var BytesRead: c_ulong = 0;
+                var success2 = w32f.ReadFile(FileHandle, FileMem, @intCast(c_ulong, FileSize.QuadPart), &BytesRead, null);
+                if (success2 != 0 and BytesRead == FileSize32)
+                {
+                    Result.ContentsSize = @intCast(u32, BytesRead);
+                    Result.Contents = @ptrCast([*]u8, FileMem);
+                }
+                else
+                {
+                    DEBUGWin32FreeFileMemory(@ptrCast([*]u8, FileMem));
+                }
+            }
+        }
+
+        _ = w32f.CloseHandle(FileHandle);
+    }
+    return Result;
+}
+
+fn DEBUGWin32WriteEntireFile(Filename: [*]const u8, MemorySize: u64, Memory: [*]u8) bool
+{
+    const FileHandle = w32f.CreateFileA(Filename, 
+                                        @bitCast(c_ulong, w32c.GENERIC_WRITE), 
+                                        0, 
+                                        null, 
+                                        w32c.CREATE_ALWAYS, 
+                                        0, 
+                                        null);
+    if (FileHandle != null and @bitCast(isize, @ptrToInt(FileHandle)) != w32c.INVALID_HANDLE_VALUE)
+    {
+        var BytesWritten: c_ulong = 0;
+        var success = w32f.WriteFile(FileHandle, Memory, @intCast(c_ulong, MemorySize), &BytesWritten, null);
+
+        _ = w32f.CloseHandle(FileHandle);
+
+        if (success != 0 and BytesWritten == MemorySize)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+const Platform = platform_callbacks
+{
+    .DEBUGReadEntireFile = DEBUGWin32ReadEntireFile,
+    .DEBUGFreeFileMemory = DEBUGWin32FreeFileMemory,
+    .DEBUGWriteEntireFile = DEBUGWin32WriteEntireFile,
+};
 
 pub export fn WinMain(Instance: HINSTANCE, 
                       PrevInstance: HINSTANCE, 
@@ -630,7 +706,7 @@ pub export fn WinMain(Instance: HINSTANCE,
             defer { _ = w32f.ReleaseDC(Window, DeviceContext); }
 
             GlobalRunning = true;
-            
+
             var GameMemory: game_memory = undefined;
             GameMemory.IsInitialized = false;
             GameMemory.PermanentStorageSize = 64 * 1024 * 1024;
@@ -753,6 +829,7 @@ pub export fn WinMain(Instance: HINSTANCE,
                         var EndX: f32 = 0;
                         var EndY: f32 = 0;
 
+                        // convert stick x and y values to range from -1.0 to 1.0
                         var StickX: f32 = 0;
                         var StickY: f32 = 0;
                         if (Pad.sThumbLX < 0)
@@ -840,7 +917,7 @@ pub export fn WinMain(Instance: HINSTANCE,
 
                 SoundBuffer.SampleCount = BytesToWrite / BytesPerSample;
 
-                handmade_main.UpdateAndRender(&BitmapBuffer, &SoundBuffer, &InputState, &GameMemory);
+                handmade_main.UpdateAndRender(&Platform, &BitmapBuffer, &SoundBuffer, &InputState, &GameMemory);
                 
                 if (SoundIsValid)
                 {

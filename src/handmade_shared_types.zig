@@ -1,3 +1,16 @@
+pub const platform_callbacks = struct 
+{
+    DEBUGReadEntireFile: fn ([*]const u8) debug_read_file_result,
+    DEBUGFreeFileMemory: fn ([*]u8) void,
+    DEBUGWriteEntireFile: fn ([*]const u8, u64, [*]u8) bool,
+};
+
+pub const debug_read_file_result = struct
+{
+    ContentsSize: u32,
+    Contents: [*]u8,
+};
+
 pub const game_offscreen_buffer = struct 
 {
     Memory: ?*c_void,
