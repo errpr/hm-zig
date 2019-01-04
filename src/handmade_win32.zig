@@ -382,7 +382,7 @@ fn Win32DisplayBufferInWindow(Buffer: win32_offscreen_buffer, DeviceContext: HDC
     }
 }
 
-fn HandleKey(VKCode: WPARAM, LParam: LPARAM) void
+fn HandleKey(VKCode: WPARAM, LParam: LPARAM, Controller: *game_controller_input) void
 {
     const WasDown = LParam & (1 << 30) != 0;
     const IsDown = LParam & (1 << 31) == 0;
@@ -398,12 +398,24 @@ fn HandleKey(VKCode: WPARAM, LParam: LPARAM) void
         'A' => {},
         'S' => {},
         'D' => {},
-        'Q' => {},
-        'E' => {},
-        w32c.VK_UP => {},
-        w32c.VK_LEFT => {},
-        w32c.VK_DOWN => {},
-        w32c.VK_RIGHT => {},
+        'Q' => {
+            Win32ProcessKeyboardMessage(&Controller.LeftShoulder, IsDown);
+        },
+        'E' => {
+            Win32ProcessKeyboardMessage(&Controller.RightShoulder, IsDown);
+        },
+        w32c.VK_UP => {
+            Win32ProcessKeyboardMessage(&Controller.Up, IsDown);
+        },
+        w32c.VK_LEFT => {
+            Win32ProcessKeyboardMessage(&Controller.Left, IsDown);
+        },
+        w32c.VK_DOWN => {
+            Win32ProcessKeyboardMessage(&Controller.Down, IsDown);
+        },
+        w32c.VK_RIGHT => {
+            Win32ProcessKeyboardMessage(&Controller.Right, IsDown);
+        },
         w32c.VK_ESCAPE => {
             w32f.OutputDebugStringA(c"Escape Pressed!\n");
         },
@@ -441,17 +453,8 @@ pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
             // gained or lost focus
             XInputEnable(@intCast(BOOL, WParam));
         },
-        w32c.WM_SYSKEYDOWN => {
-            HandleKey(WParam, LParam);
-        },
-        w32c.WM_SYSKEYUP => {
-            HandleKey(WParam, LParam);
-        },
-        w32c.WM_KEYDOWN => {
-            HandleKey(WParam, LParam);
-        },
-        w32c.WM_KEYUP => {
-            HandleKey(WParam, LParam);
+        w32c.WM_SYSKEYDOWN, w32c.WM_SYSKEYUP, w32c.WM_KEYDOWN, w32c.WM_KEYUP => {
+            unreachable;
         },
         w32c.WM_PAINT => {           
             var Paint: PAINTSTRUCT = undefined;
@@ -562,6 +565,12 @@ fn Win32FillSoundBuffer(ByteToLock: DWORD, BytesPerSample: DWORD,
         // w32f.OutputDebugStringA(c"Couldn't lock buffer\n");
         // couldn't lock buffer?
     }
+}
+
+fn Win32ProcessKeyboardMessage(ButtonState: *game_button_state, EndedDown: bool) void
+{
+    ButtonState.EndedDown = EndedDown;
+    ButtonState.HalfTransitionCount += 1;
 }
 
 fn Win32ProcessXInputDigitalButton(OldState: game_button_state, EndedDown: bool) game_button_state
@@ -746,6 +755,8 @@ pub export fn WinMain(Instance: HINSTANCE,
                     };
                 }
             }
+            var KeyboardController = &InputState.Controllers[0];
+            KeyboardController.IsAnalog = false;
 
             // sound
             const SamplesPerSecond = 48000;
@@ -789,8 +800,16 @@ pub export fn WinMain(Instance: HINSTANCE,
                     } 
                     else
                     {
-                        _ = w32f.TranslateMessage(&Message);
-                        _ = w32f.DispatchMessageW(&Message);
+                        switch(Message.message)
+                        {
+                            w32c.WM_SYSKEYDOWN, w32c.WM_SYSKEYUP, w32c.WM_KEYDOWN, w32c.WM_KEYUP => {
+                                HandleKey(Message.wParam, Message.lParam, KeyboardController);
+                            },
+                            else => {
+                                _ = w32f.TranslateMessage(&Message);
+                                _ = w32f.DispatchMessageW(&Message);
+                            }
+                        }
                         MessageResult = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
                     }
                 }
@@ -798,7 +817,7 @@ pub export fn WinMain(Instance: HINSTANCE,
 
                 // Poll controllers
                 const num_controllers = 4;
-                var ControllerIndex: u32 = 0;
+                var ControllerIndex: u32 = 1;
                 while (ControllerIndex < num_controllers) 
                 {
                     var ControllerState: XINPUT_STATE = undefined;

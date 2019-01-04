@@ -76,6 +76,22 @@ pub fn UpdateAndRender(Platform: *const platform_callbacks,
     else
     {
         // digital only or maybe keyboard
+        if(Input0.Up.EndedDown)
+        {
+            GameState.YOffset -%= 8;
+        }
+        if(Input0.Down.EndedDown)
+        {
+            GameState.YOffset +%= 8;
+        }
+        if(Input0.Left.EndedDown)
+        {
+            GameState.XOffset -%= 8;
+        }
+        if(Input0.Right.EndedDown)
+        {
+            GameState.XOffset +%= 8;
+        }
     }
     
 
