@@ -50,7 +50,7 @@ pub const game_memory = struct
 
 pub const game_input = struct
 {
-    Controllers: [4]game_controller_input,
+    Controllers: [5]game_controller_input,
 };
 
 pub const game_button_state = struct 
@@ -61,26 +61,21 @@ pub const game_button_state = struct
 
 pub const game_controller_input = struct
 {
+    IsConnected:    bool,
     IsAnalog:       bool,
-    
-    StartY:         f32,
-    MinY:           f32,
-    MaxY:           f32,
-    EndY:           f32,
+    StickAverageX:  f32,
+    StickAverageY:  f32,
 
-    StartX:         f32,
-    MinX:           f32,
-    MaxX:           f32,
-    EndX:           f32,
-
-    Up:             game_button_state,
-    Down:           game_button_state,
-    Left:           game_button_state,
-    Right:          game_button_state,
-    LeftShoulder:   game_button_state,
-    RightShoulder:  game_button_state,
-    AButton:        game_button_state,
-    BButton:        game_button_state,
-    XButton:        game_button_state,
-    YButton:        game_button_state,
+    MoveUp:             game_button_state,
+    MoveDown:           game_button_state,
+    MoveLeft:           game_button_state,
+    MoveRight:          game_button_state,
+    LeftShoulder:       game_button_state,
+    RightShoulder:      game_button_state,
+    ActionUp:           game_button_state,
+    ActionDown:         game_button_state,
+    ActionLeft:         game_button_state,
+    ActionRight:        game_button_state,
+    Start:              game_button_state,
+    Back:               game_button_state,
 };

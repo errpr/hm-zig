@@ -27,73 +27,80 @@ pub fn UpdateAndRender(Platform: *const platform_callbacks,
     }
 
     // input processing
-    var Input0 = Input.Controllers[0];
-    
-    if (Input0.IsAnalog)
+    var ControllerIndex: u32 = 0;
+    while(ControllerIndex < Input.Controllers.len) : (ControllerIndex += 1)
     {
-        const StickX = Input0.EndX;
-        if(StickX > 0)
-        {
-            GameState.XOffset +%= @floatToInt(u32, StickX * 10);
-            const ToneValue = 512 + @floatToInt(i32, StickX * 256.0);
-            if (ToneValue < 1)
-            {
-                GameState.ToneHz = 1;
-            }
-            else
-            {
-                GameState.ToneHz = @intCast(u32, ToneValue);
-            }
-        }
-        else if(StickX < 0)
-        {
-            GameState.XOffset -%= @floatToInt(u32, -StickX * 10);
-            const ToneValue = 512 - @floatToInt(i32, -StickX * 256.0);
-            if (ToneValue < 1)
-            {
-                GameState.ToneHz = 1;
-            }
-            else
-            {
-                GameState.ToneHz = @intCast(u32, ToneValue);
-            }
-        }
-        else
-        {
-            GameState.ToneHz = 512;
-        }
+        var CurrentController = Input.Controllers[ControllerIndex];
 
-        const StickY = Input0.EndY;
-        if(StickY > 0)
+        if (!CurrentController.IsConnected) continue;
+
+        if (CurrentController.IsAnalog)
         {
-            GameState.YOffset +%= @floatToInt(u32, StickY * 10.0);
+            const StickX = CurrentController.StickAverageX;
+            if(StickX > 0)
+            {
+                // draw positive is to the right, stick positive is to the left
+                GameState.XOffset +%= @floatToInt(u32, StickX * 10);
+                const ToneValue = 512 + @floatToInt(i32, StickX * 256.0);
+                if (ToneValue < 1)
+                {
+                    GameState.ToneHz = 1;
+                }
+                else
+                {
+                    GameState.ToneHz = @intCast(u32, ToneValue);
+                }
+            }
+            else if(StickX < 0)
+            {
+                // draw positive is to the right, stick positive is to the left
+                GameState.XOffset -%= @floatToInt(u32, -StickX * 10);
+                const ToneValue = 512 - @floatToInt(i32, -StickX * 256.0);
+                if (ToneValue < 1)
+                {
+                    GameState.ToneHz = 1;
+                }
+                else
+                {
+                    GameState.ToneHz = @intCast(u32, ToneValue);
+                }
+            }
+            else
+            {
+                GameState.ToneHz = 512;
+            }
+
+            const StickY = CurrentController.StickAverageY;
+            if(StickY > 0)
+            {
+                GameState.YOffset -%= @floatToInt(u32, StickY * 10.0);
+            }
+            else
+            {
+                GameState.YOffset +%= @floatToInt(u32, -StickY * 10.0);
+            }
         }
         else
         {
-            GameState.YOffset -%= @floatToInt(u32, -StickY * 10.0);
+            // digital only or maybe keyboard
+            if(CurrentController.MoveUp.EndedDown)
+            {
+                GameState.YOffset -%= 8;
+            }
+            if(CurrentController.MoveDown.EndedDown)
+            {
+                GameState.YOffset +%= 8;
+            }
+            if(CurrentController.MoveLeft.EndedDown)
+            {
+                GameState.XOffset -%= 8;
+            }
+            if(CurrentController.MoveRight.EndedDown)
+            {
+                GameState.XOffset +%= 8;
+            }
         }
     }
-    else
-    {
-        // digital only or maybe keyboard
-        if(Input0.Up.EndedDown)
-        {
-            GameState.YOffset -%= 8;
-        }
-        if(Input0.Down.EndedDown)
-        {
-            GameState.YOffset +%= 8;
-        }
-        if(Input0.Left.EndedDown)
-        {
-            GameState.XOffset -%= 8;
-        }
-        if(Input0.Right.EndedDown)
-        {
-            GameState.XOffset +%= 8;
-        }
-    }
-    
 
     // sound
     OutputSound(SoundBuffer, GameState.ToneHz);

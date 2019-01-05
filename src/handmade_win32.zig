@@ -50,6 +50,10 @@ extern "kernel32" stdcallcc fn GetProcAddress(hModule: HMODULE, lpProcName: LPCS
 
 const SRCCOPY: DWORD = 0x00CC0020;
 
+const XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE    = 7849;
+const XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE   = 8689;
+const XINPUT_GAMEPAD_TRIGGER_THRESHOLD      = 30;
+
 // wButtons bitmask
 const XINPUT_GAMEPAD_DPAD_UP: WORD        = 0x0001;
 const XINPUT_GAMEPAD_DPAD_DOWN: WORD      = 0x0002;
@@ -382,53 +386,88 @@ fn Win32DisplayBufferInWindow(Buffer: win32_offscreen_buffer, DeviceContext: HDC
     }
 }
 
+fn Win32ProcessPendingMessages(KeyboardController: *game_controller_input, MainReturn: *c_int) void
+{
+    var Message: MSG = undefined;
+    var MessageResult: BOOL = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
+    while (MessageResult != 0) : (MessageResult = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE))
+    {
+        switch(Message.message)
+        {
+            w32c.WM_QUIT => {
+                GlobalRunning = false;
+                MainReturn.* = @intCast(c_int, Message.wParam);
+                MessageResult = 0;
+            },
+            w32c.WM_SYSKEYDOWN, w32c.WM_SYSKEYUP, w32c.WM_KEYDOWN, w32c.WM_KEYUP => {
+                const VKCode = @intCast(u32, Message.wParam);
+                const WasDown = Message.lParam & (1 << 30) != 0;
+                const IsDown = Message.lParam & (1 << 31) == 0;
+                
+                if (IsDown == WasDown) 
+                {
+                    return;
+                }
+
+                switch (VKCode) 
+                {
+                    'W' => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.MoveUp, IsDown);
+                    },
+                    'A' => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.MoveLeft, IsDown);
+                    },
+                    'S' => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.MoveDown, IsDown);
+                    },
+                    'D' => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.MoveRight, IsDown);
+                    },
+                    'Q' => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.LeftShoulder, IsDown);
+                    },
+                    'E' => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.RightShoulder, IsDown);
+                    },
+                    w32c.VK_UP => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.ActionUp, IsDown);
+                    },
+                    w32c.VK_LEFT => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.ActionLeft, IsDown);
+                    },
+                    w32c.VK_DOWN => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.ActionDown, IsDown);
+                    },
+                    w32c.VK_RIGHT => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.ActionRight, IsDown);
+                    },
+                    w32c.VK_ESCAPE => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.Start, IsDown);
+                    },
+                    w32c.VK_SPACE => {
+                        Win32ProcessKeyboardMessage(&KeyboardController.Back, IsDown);
+                    },
+                    w32c.VK_F4 => {
+                        // check for alt+f4
+                        if (Message.lParam & (1 << 29) != 0)
+                        {
+                            GlobalRunning = false;
+                        }
+                    },
+                    else => {}
+                }
+            },
+            else => {
+                _ = w32f.TranslateMessage(&Message);
+                _ = w32f.DispatchMessageW(&Message);
+            }
+        }
+    }
+}
+
 fn HandleKey(VKCode: WPARAM, LParam: LPARAM, Controller: *game_controller_input) void
 {
-    const WasDown = LParam & (1 << 30) != 0;
-    const IsDown = LParam & (1 << 31) == 0;
     
-    if (IsDown == WasDown) 
-    {
-        return;
-    }
-
-    switch (VKCode) 
-    {
-        'W' => {},
-        'A' => {},
-        'S' => {},
-        'D' => {},
-        'Q' => {
-            Win32ProcessKeyboardMessage(&Controller.LeftShoulder, IsDown);
-        },
-        'E' => {
-            Win32ProcessKeyboardMessage(&Controller.RightShoulder, IsDown);
-        },
-        w32c.VK_UP => {
-            Win32ProcessKeyboardMessage(&Controller.Up, IsDown);
-        },
-        w32c.VK_LEFT => {
-            Win32ProcessKeyboardMessage(&Controller.Left, IsDown);
-        },
-        w32c.VK_DOWN => {
-            Win32ProcessKeyboardMessage(&Controller.Down, IsDown);
-        },
-        w32c.VK_RIGHT => {
-            Win32ProcessKeyboardMessage(&Controller.Right, IsDown);
-        },
-        w32c.VK_ESCAPE => {
-            w32f.OutputDebugStringA(c"Escape Pressed!\n");
-        },
-        w32c.VK_SPACE => {},
-        w32c.VK_F4 => {
-            // check for alt+f4
-            if (LParam & (1 << 29) != 0)
-            {
-                GlobalRunning = false;
-            }
-        },
-        else => {}
-    }
 }
 
 pub stdcallcc fn Win32MainWindowCallback(Window: HWND,
@@ -586,6 +625,20 @@ fn Win32ProcessXInputDigitalButton(OldState: game_button_state, EndedDown: bool)
     };
 }
 
+fn Win32ProcessXInputStickValue(XInputStickValue: c_short, comptime DeadZoneThreshold: comptime_int) f32
+{
+    var NewStickValue: f32 = 0;
+    if (XInputStickValue < -DeadZoneThreshold)
+    {
+        NewStickValue = @intToFloat(f32, XInputStickValue) / 32768.0;
+    }
+    else if (XInputStickValue > DeadZoneThreshold)
+    {
+        NewStickValue = @intToFloat(f32, XInputStickValue) / 32767.0;
+    }
+    return NewStickValue;
+}
+
 fn DEBUGWin32FreeFileMemory(Memory: [*]u8) void
 {
     _ = w32f.VirtualFree(Memory, 0, w32c.MEM_RELEASE);
@@ -673,7 +726,7 @@ pub export fn WinMain(Instance: HINSTANCE,
                       CommandLine: LPSTR, 
                       ShowCode: c_int) c_int 
 {
-    var Result: c_int = 0;
+    var MainReturn: c_int = 0;
 
     Win32LoadXInput();
 
@@ -733,30 +786,27 @@ pub export fn WinMain(Instance: HINSTANCE,
                 while (ControllerIndex < InputState.Controllers.len) : (ControllerIndex += 1)
                 {
                     InputState.Controllers[ControllerIndex] = game_controller_input {
-                        .IsAnalog = true,
-                        .StartX = 0,
-                        .StartY = 0,
-                        .MinX = 0,
-                        .MinY = 0,
-                        .MaxX = 0,
-                        .MaxY = 0,
-                        .EndX = 0,
-                        .EndY = 0,
-                        .Up = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
-                        .Down = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
-                        .Left = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
-                        .Right = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .IsConnected = false,
+                        .IsAnalog = false,
+                        .StickAverageX = 0,
+                        .StickAverageY = 0,
+                        .MoveUp = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .MoveDown = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .MoveLeft = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .MoveRight = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
                         .LeftShoulder = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
                         .RightShoulder = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
-                        .AButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
-                        .BButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
-                        .XButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
-                        .YButton = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .ActionUp = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .ActionDown = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .ActionLeft = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .ActionRight = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .Start = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
+                        .Back = game_button_state { .HalfTransitionCount = 0, .EndedDown = false },
                     };
                 }
             }
             var KeyboardController = &InputState.Controllers[0];
-            KeyboardController.IsAnalog = false;
+            KeyboardController.IsConnected = true;
 
             // sound
             const SamplesPerSecond = 48000;
@@ -784,115 +834,78 @@ pub export fn WinMain(Instance: HINSTANCE,
             // not sure how to get rdtsc working
             //var LastCycleCount = __rdtsc();
 
-            while (GlobalRunning) 
+            while (GlobalRunning)
             {
-
-                // Process OS messages
-                var Message: MSG = undefined;
-                var MessageResult: BOOL = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
-                while (MessageResult != 0)
-                {
-                    if (Message.message == w32c.WM_QUIT)
-                    {
-                        GlobalRunning = false;
-                        Result = @intCast(c_int, Message.wParam);
-                        MessageResult = 0;
-                    } 
-                    else
-                    {
-                        switch(Message.message)
-                        {
-                            w32c.WM_SYSKEYDOWN, w32c.WM_SYSKEYUP, w32c.WM_KEYDOWN, w32c.WM_KEYUP => {
-                                HandleKey(Message.wParam, Message.lParam, KeyboardController);
-                            },
-                            else => {
-                                _ = w32f.TranslateMessage(&Message);
-                                _ = w32f.DispatchMessageW(&Message);
-                            }
-                        }
-                        MessageResult = w32f.PeekMessageW(LPMSG(&Message), null, UINT(0), UINT(0), w32c.PM_REMOVE);
-                    }
-                }
-
+                // zig can't do C-style unions, so we're doing it this way
+                KeyboardController.MoveUp.HalfTransitionCount = 0;
+                KeyboardController.MoveDown.HalfTransitionCount = 0;
+                KeyboardController.MoveLeft.HalfTransitionCount = 0;
+                KeyboardController.MoveRight.HalfTransitionCount = 0;
+                KeyboardController.LeftShoulder.HalfTransitionCount = 0;
+                KeyboardController.RightShoulder.HalfTransitionCount = 0;
+                KeyboardController.ActionUp.HalfTransitionCount = 0;
+                KeyboardController.ActionDown.HalfTransitionCount = 0;
+                KeyboardController.ActionLeft.HalfTransitionCount = 0;
+                KeyboardController.ActionRight.HalfTransitionCount = 0;
+                // KeyboardController.Start.HalfTransitionCount = 0;
+                // KeyboardController.Back.HalfTransitionCount = 0;
+                Win32ProcessPendingMessages(KeyboardController, &MainReturn);
 
                 // Poll controllers
-                const num_controllers = 4;
+                const num_controllers = 5;
+                // Skip first controller because its used for the keyboard
                 var ControllerIndex: u32 = 1;
                 while (ControllerIndex < num_controllers) 
                 {
                     var ControllerState: XINPUT_STATE = undefined;
-
-                    const errorcode = XInputGetState(ControllerIndex, &ControllerState);
+                    var CurrentController = &InputState.Controllers[ControllerIndex];
+                    //                              (ControllerIndex - 1) because we want the first XInput Controller, but our index skips 0 because thats the keyboard controller in our struct
+                    const errorcode = XInputGetState(ControllerIndex - 1, &ControllerState);
                     if (errorcode == w32c.ERROR_SUCCESS)
                     {
                         const Pad = ControllerState.Gamepad;
-                        const Up            = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
-                        const Down          = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
-                        const Left          = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
-                        const Right         = (Pad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
-                        const Start         = (Pad.wButtons & XINPUT_GAMEPAD_START) != 0;
-                        const Back          = (Pad.wButtons & XINPUT_GAMEPAD_BACK) != 0;
-                        const LeftShoulder  = (Pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-                        const RightShoulder = (Pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
-                        const AButton       = (Pad.wButtons & XINPUT_GAMEPAD_A) != 0;
-                        const BButton       = (Pad.wButtons & XINPUT_GAMEPAD_B) != 0;
-                        const XButton       = (Pad.wButtons & XINPUT_GAMEPAD_X) != 0;
-                        const YButton       = (Pad.wButtons & XINPUT_GAMEPAD_Y) != 0;
-
-                        var StartX: f32 = 0;
-                        var StartY: f32 = 0;
-                        var MaxX: f32 = 0;
-                        var MaxY: f32 = 0;
-                        var MinX: f32 = 0;
-                        var MinY: f32 = 0;
-                        var EndX: f32 = 0;
-                        var EndY: f32 = 0;
+                        const Up            = 0 != (Pad.wButtons & XINPUT_GAMEPAD_DPAD_UP);
+                        const Down          = 0 != (Pad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+                        const Left          = 0 != (Pad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+                        const Right         = 0 != (Pad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+                        const Start         = 0 != (Pad.wButtons & XINPUT_GAMEPAD_START);
+                        const Back          = 0 != (Pad.wButtons & XINPUT_GAMEPAD_BACK);
+                        const LeftShoulder  = 0 != (Pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
+                        const RightShoulder = 0 != (Pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+                        const AButton       = 0 != (Pad.wButtons & XINPUT_GAMEPAD_A);
+                        const BButton       = 0 != (Pad.wButtons & XINPUT_GAMEPAD_B);
+                        const XButton       = 0 != (Pad.wButtons & XINPUT_GAMEPAD_X);
+                        const YButton       = 0 != (Pad.wButtons & XINPUT_GAMEPAD_Y);
 
                         // convert stick x and y values to range from -1.0 to 1.0
-                        var StickX: f32 = 0;
-                        var StickY: f32 = 0;
-                        if (Pad.sThumbLX < 0)
-                        {
-                            StickX = @intToFloat(f32, Pad.sThumbLX) / 32768.0;
-                        }
-                        else
-                        {
-                            StickX = @intToFloat(f32, Pad.sThumbLX) / 32767.0;
-                        }
+                        var StickX = Win32ProcessXInputStickValue(Pad.sThumbLX, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+                        var StickY = Win32ProcessXInputStickValue(Pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+                        CurrentController.IsConnected = true;
+                        CurrentController.IsAnalog = true;
 
-                        if (Pad.sThumbLY < 0)
-                        {
-                            StickY = @intToFloat(f32, Pad.sThumbLY) / 32768.0;
-                        }
-                        else
-                        {
-                            StickY = @intToFloat(f32, Pad.sThumbLY) / 32767.0;
-                        }
+                        // dpad overwrites analog
+                        if (Up) StickY = 1.0;
+                        if (Down) StickY = -1.0;
+                        if (Left) StickX = -1.0;
+                        if (Right) StickX = 1.0;
 
-                        StartX = InputState.Controllers[ControllerIndex].EndX;
-                        StartY = InputState.Controllers[ControllerIndex].EndY;
-                        var NewState = game_controller_input {
-                            .IsAnalog = true,
-                            .StartX = StartX,
-                            .StartY = StartY,
-                            .MinX = StickX,
-                            .MinY = StickY,
-                            .MaxX = StickX,
-                            .MaxY = StickY,
-                            .EndX = StickX,
-                            .EndY = StickY,
-                            .Up = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].Up, Up),
-                            .Down = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].Down, Down),
-                            .Left = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].Left, Left),
-                            .Right = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].Right, Right),
-                            .LeftShoulder = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].LeftShoulder, LeftShoulder),
-                            .RightShoulder = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].RightShoulder, RightShoulder),
-                            .AButton = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].AButton, AButton),
-                            .BButton = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].BButton, BButton),
-                            .XButton = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].XButton, XButton),
-                            .YButton = Win32ProcessXInputDigitalButton(InputState.Controllers[ControllerIndex].YButton, YButton),
-                        };
-                        InputState.Controllers[ControllerIndex] = NewState;
+                        CurrentController.StickAverageX = StickX;
+                        CurrentController.StickAverageY = StickY;
+                        
+                        var Threshold: f32 = 0.5;
+                        CurrentController.MoveRight = Win32ProcessXInputDigitalButton(CurrentController.MoveRight,  StickX > Threshold);
+                        CurrentController.MoveLeft  = Win32ProcessXInputDigitalButton(CurrentController.MoveLeft,   StickX < -Threshold);
+                        CurrentController.MoveDown  = Win32ProcessXInputDigitalButton(CurrentController.MoveDown,   StickY > Threshold);
+                        CurrentController.MoveUp    = Win32ProcessXInputDigitalButton(CurrentController.MoveUp,     StickY < -Threshold);
+
+                        CurrentController.LeftShoulder   = Win32ProcessXInputDigitalButton(CurrentController.LeftShoulder, LeftShoulder);
+                        CurrentController.RightShoulder  = Win32ProcessXInputDigitalButton(CurrentController.RightShoulder, RightShoulder);
+                        CurrentController.ActionUp       = Win32ProcessXInputDigitalButton(CurrentController.ActionUp, AButton);
+                        CurrentController.ActionDown     = Win32ProcessXInputDigitalButton(CurrentController.ActionDown, BButton);
+                        CurrentController.ActionLeft     = Win32ProcessXInputDigitalButton(CurrentController.ActionLeft, XButton);
+                        CurrentController.ActionRight    = Win32ProcessXInputDigitalButton(CurrentController.ActionRight, YButton);
+                        CurrentController.Start          = Win32ProcessXInputDigitalButton(CurrentController.Start, Start);
+                        CurrentController.Back           = Win32ProcessXInputDigitalButton(CurrentController.Back, Back);
                     }
                     else
                     {
@@ -974,5 +987,5 @@ pub export fn WinMain(Instance: HINSTANCE,
     {
         w32f.OutputDebugStringA(c"No atom\n");
     }
-    return Result;
+    return MainReturn;
 }
